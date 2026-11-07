@@ -173,7 +173,8 @@ func (a *nativeApp) showExportSuccess(msg, path string) {
 		Width(ui.DpiX(556)).
 		Height(ui.DpiY(60)).
 		CtrlStyle(co.ES_MULTILINE|co.ES_READONLY).
-		WndStyle(co.WS_CHILD|co.WS_VISIBLE))
+		WndStyle(co.WS_CHILD|co.WS_VISIBLE).
+		WndExStyle(0))
 
 	btnOpen := ui.NewButton(modal, ui.OptsButton().
 		Text("打开所在目录").
