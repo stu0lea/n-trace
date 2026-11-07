@@ -143,7 +143,8 @@ func (a *nativeApp) exportDone(err error, path string, n int, start time.Time, l
 			a.message("导出 CSV", "导出失败：\n"+err.Error(), co.MB_OK|co.MB_ICONERROR)
 			return
 		}
-		msg := fmt.Sprintf("已导出 %s 条%s · %s", commaInt(n), label, time.Since(start).Round(time.Millisecond))
+		msg := fmt.Sprintf("已导出 %s 条%s日志，耗时 %.1f 秒",
+			commaInt(n), label, time.Since(start).Seconds())
 		a.setStatus("就绪")
 		appPrintf("%s -> %s", msg, path)
 		a.showExportSuccess(msg, path)
@@ -153,42 +154,34 @@ func (a *nativeApp) exportDone(err error, path string, n int, start time.Time, l
 func (a *nativeApp) showExportSuccess(msg, path string) {
 	modal := ui.NewModal(a.wnd, ui.OptsModal().
 		Title("导出 CSV").
-		Size(ui.Dpi(640, 238)).
+		Size(ui.Dpi(620, 238)).
 		Style(co.WS_CAPTION|co.WS_SYSMENU|co.WS_VISIBLE))
 
 	ui.NewStatic(modal, ui.OptsStatic().
 		Text("导出成功").
 		Position(ui.Dpi(20, 24)).
-		Size(ui.Dpi(600, 28)).
+		Size(ui.Dpi(580, 28)).
 		CtrlStyle(co.SS_CENTER|co.SS_CENTERIMAGE))
 	ui.NewStatic(modal, ui.OptsStatic().
 		Text(msg).
-		Position(ui.Dpi(32, 66)).
-		Size(ui.Dpi(576, 22)).
+		Position(ui.Dpi(32, 60)).
+		Size(ui.Dpi(556, 22)).
 		CtrlStyle(co.SS_LEFT|co.SS_CENTERIMAGE))
-	ui.NewStatic(modal, ui.OptsStatic().
-		Text("文件：").
+	ui.NewEdit(modal, ui.OptsEdit().
+		Text("文件位置："+path).
 		Position(ui.Dpi(32, 94)).
-		Size(ui.Dpi(576, 20)).
-		CtrlStyle(co.SS_LEFT|co.SS_CENTERIMAGE))
-	ui.NewStatic(modal, ui.OptsStatic().
-		Text(filepath.Base(path)).
-		Position(ui.Dpi(32, 116)).
-		Size(ui.Dpi(576, 20)).
-		CtrlStyle(co.SS_LEFT|co.SS_CENTERIMAGE|co.SS_ENDELLIPSIS))
-	ui.NewStatic(modal, ui.OptsStatic().
-		Text(filepath.Dir(path)).
-		Position(ui.Dpi(32, 138)).
-		Size(ui.Dpi(576, 20)).
-		CtrlStyle(co.SS_LEFT|co.SS_CENTERIMAGE|co.SS_PATHELLIPSIS))
+		Width(ui.DpiX(556)).
+		Height(ui.DpiY(60)).
+		CtrlStyle(co.ES_MULTILINE|co.ES_READONLY).
+		WndStyle(co.WS_CHILD|co.WS_VISIBLE))
 
 	btnOpen := ui.NewButton(modal, ui.OptsButton().
 		Text("打开所在目录").
-		Position(ui.Dpi(192, 176)).
+		Position(ui.Dpi(194, 174)).
 		Width(ui.DpiX(120)))
 	btnClose := ui.NewButton(modal, ui.OptsButton().
 		Text("关闭").
-		Position(ui.Dpi(334, 176)).
+		Position(ui.Dpi(336, 174)).
 		Width(ui.DpiX(90)))
 	btnOpen.On().BnClicked(func() {
 		_ = exec.Command("explorer.exe", "/select,", path).Start()
@@ -200,6 +193,11 @@ func (a *nativeApp) showExportSuccess(msg, path string) {
 		if p.VirtualKeyCode() == co.VK_ESCAPE && !p.IsReleasingKey() {
 			modal.Hwnd().PostMessage(co.WM_CLOSE, 0, 0)
 		}
+	})
+	brush, _ := win.GetSysColorBrush(co.COLOR_BTNFACE)
+	modal.On().WmCtlColorEdit(func(p ui.WmCtlColor) win.HBRUSH {
+		_, _ = p.Hdc().SetBkColor(win.GetSysColor(co.COLOR_BTNFACE))
+		return brush
 	})
 	modal.ShowModal()
 }
