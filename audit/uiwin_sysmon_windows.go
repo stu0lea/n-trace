@@ -191,15 +191,14 @@ func (p *sysmonPanel) loadStatus() {
 		st := sysmonStatus(p.app.cfg.dataDir)
 		meta, _ := p.app.cfg.db.Meta()
 		srcs, _ := meta["sources"].([]map[string]interface{})
-		enabled, connected, total, liveErr := p.app.liveInfo()
 		p.modal.UiThread(func() {
-			p.applyStatus(st, srcs, enabled, connected, total, liveErr)
+			p.applyStatus(st, srcs)
 			p.setWorking(false)
 		})
 	}()
 }
 
-func (p *sysmonPanel) applyStatus(st SysmonStatus, srcs []map[string]interface{}, liveEnabled, liveConnected bool, liveTotal int64, liveErr string) {
+func (p *sysmonPanel) applyStatus(st SysmonStatus, srcs []map[string]interface{}) {
 	state := "未安装"
 	switch {
 	case st.Installed:
@@ -230,18 +229,8 @@ func (p *sysmonPanel) applyStatus(st SysmonStatus, srcs []map[string]interface{}
 		}
 	}
 	p.fillSources(srcs)
-	lines := []string{"【Sysmon 实时采集】"}
-	liveState := "未开启"
-	switch {
-	case liveConnected:
-		liveState = fmt.Sprintf("已连接 · 已入库 %s 条", commaInt64(liveTotal))
-	case liveEnabled && liveErr != "":
-		liveState = liveErr
-	case liveEnabled:
-		liveState = "未连接"
-	}
+	lines := []string{}
 	lines = append(lines,
-		"实时采集："+liveState,
 		"状态："+state,
 		"系统："+st.OSVersion+"（"+st.Arch+"）",
 		"安装包："+st.Package+" / "+st.PackageFile,
