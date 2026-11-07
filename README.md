@@ -18,6 +18,10 @@ N-trace 是一款面向应急响应和终端排查的 Windows 联网行为审计
 
 ![N-trace Windows 原生 GUI](docs/images/n-trace-windows-gui.png)
 
+#### 语法筛选与热门词
+
+![N-trace Windows 语法筛选](docs/images/n-trace-windows-filter.png)
+
 #### 进程审计
 
 ![N-trace Windows 进程审计](docs/images/n-trace-windows-processes.png)
