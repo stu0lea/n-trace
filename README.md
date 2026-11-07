@@ -22,6 +22,55 @@ N-trace 是一款面向应急响应和终端排查的 Windows 联网行为审计
 - 实时读取使用持久化 `EventRecordID` 断点，重启后只补读关闭期间新增事件。
 - 运行日志按月归档，默认保留 6 个月。
 
+## 平台与 UI 适配
+
+N-trace 采用双 UI 架构：Windows 优先使用原生 Win32 GUI，其他平台使用本地 Web UI。
+
+| 系统 / 模式 | 默认 UI | 实时采集 | 离线 `.evtx` | 启动方式 | 构建工具链 |
+|---|---|---|---|---|---|
+| Windows amd64 / arm64 | 原生 GUI | 支持 Sysmon | 支持 | 双击 EXE | Windows 固定使用 Go 1.20 |
+| Windows `-web` | Web + CMD | 支持 Sysmon | 支持 | 命令行或快捷方式加 `-web` | Windows 固定使用 Go 1.20 |
+| macOS Intel / Apple Silicon | Web | 不支持 | 支持 | 终端运行程序 | 本机高版本 Go |
+| Linux amd64 | Web | 不支持 | 支持 | 终端运行程序 | 本机高版本 Go |
+
+### Windows 原生 GUI
+
+- 默认双击运行，不创建 CMD 窗口。
+- 使用 Win32 原生控件，支持连接、进程、DNS、统计、日志源管理和 Sysmon 管理。
+- 支持 Windows 7 及以上的 64 位构建；Windows 10 / 11 为推荐环境。
+- 读取 Sysmon、安装 Sysmon 和修改日志上限需要管理员权限。
+
+### Windows Web 模式
+
+```powershell
+.\n-trace_windows_amd64.exe -web -addr 127.0.0.1:8899
+```
+
+- 启动时创建 CMD 窗口，显示访问地址、数据目录和实时采集状态。
+- 使用浏览器操作界面，CMD 窗口按 `Ctrl+C` 可退出。
+- 页面右上角提供“退出程序”，会同时停止 Web 服务和实时采集。
+- 关闭浏览器标签页不会停止 N-trace。数据目录中的 `open-n-trace.url` 可以重新打开页面。
+
+### macOS / Linux Web 模式
+
+```bash
+./n-trace_darwin_arm64
+./n-trace_linux_amd64
+```
+
+- 默认通过终端启动并进入 Web 模式，不需要额外添加 `-web`。
+- 只支持导入 `.evtx` 进行离线分析。
+- 不包含 Windows 原生 GUI、Sysmon 安装和 Sysmon 实时采集能力。
+- Web 页面只监听本机回环地址，并使用随机访问 token。
+- 需要现代 Chrome、Edge、Firefox 或 Safari。
+
+### 构建差异
+
+- Windows 产物使用 Go 1.20，以保持旧版 Windows 兼容性。
+- macOS / Linux 产物使用构建机上的高版本 Go。
+- `go.mod` 的语言最低版本仍为 Go 1.20，共享代码不能使用更高版本才支持的语言特性。
+- Web 模式构建时仍需将 `audit/ui` 嵌入可执行文件。
+
 ## 界面与工作流
 
 主界面包含三个数据页签：
@@ -63,15 +112,15 @@ N-trace 是一款面向应急响应和终端排查的 Windows 联网行为审计
 
 目录参数只会读取目录下的 `.evtx` 文件。
 
-### 浏览器调试模式
+### 浏览器模式
 
-Windows 下使用 `-web` 可以启动旧的本地浏览器界面。非 Windows 平台会自动使用浏览器模式，但仍只能做离线日志分析。
+Windows 下使用 `-web` 启动本地浏览器界面和 CMD 窗口。非 Windows 平台会自动使用浏览器模式，但仍只能做离线日志分析。
 
 ```powershell
 .\n-trace_windows_amd64.exe -web -addr 127.0.0.1:8899 -no-open
 ```
 
-Web 模式只监听本机回环地址，并使用随机访问 token。
+Web 模式只监听本机回环地址，并使用随机访问 token。关闭浏览器不会停止后台服务，可双击数据目录中的 `open-n-trace.url` 重新打开。
 
 ## 命令行参数
 
