@@ -3,7 +3,6 @@
 package main
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/rodrigocfd/windigo/co"
@@ -161,7 +160,7 @@ func (t *sharedVirtualTable[T]) reload(expr, sortField string, desc bool) {
 			t.lv.SetRedraw(true)
 			t.lv.Hwnd().InvalidateRect(nil, false)
 			t.lv.Hwnd().UpdateWindow()
-			t.app.setStatus(fmt.Sprintf("%s %s", t.kind, commaInt(total)))
+			t.app.setStatus("就绪")
 		})
 	}()
 }
@@ -191,7 +190,7 @@ func (t *sharedVirtualTable[T]) refreshCount() {
 					restoreListHOrigin(t.lv, hOrigin)
 					restoreScrollRatio(t.lv, oldTop, oldTotal, total)
 				})
-				t.app.setStatus(fmt.Sprintf("%s %s", t.kind, commaInt(total)))
+				t.app.setStatus("就绪")
 			}
 		})
 	}()
