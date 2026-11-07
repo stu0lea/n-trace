@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -152,7 +153,7 @@ func (a *nativeApp) exportDone(err error, path string, n int, start time.Time, l
 func (a *nativeApp) showExportSuccess(msg, path string) {
 	modal := ui.NewModal(a.wnd, ui.OptsModal().
 		Title("导出 CSV").
-		Size(ui.Dpi(640, 260)).
+		Size(ui.Dpi(640, 238)).
 		Style(co.WS_CAPTION|co.WS_SYSMENU|co.WS_VISIBLE))
 
 	ui.NewStatic(modal, ui.OptsStatic().
@@ -160,17 +161,38 @@ func (a *nativeApp) showExportSuccess(msg, path string) {
 		Position(ui.Dpi(20, 24)).
 		Size(ui.Dpi(600, 28)).
 		CtrlStyle(co.SS_CENTER|co.SS_CENTERIMAGE))
-	detail := ui.NewEdit(modal, ui.OptsEdit().
-		Position(ui.Dpi(24, 64)).
-		Width(ui.DpiX(592)).
-		Height(ui.DpiY(92)).
-		CtrlStyle(co.ES_MULTILINE|co.ES_READONLY|co.ES_AUTOVSCROLL).
-		WndStyle(co.WS_CHILD|co.WS_VISIBLE|co.WS_BORDER|co.WS_VSCROLL))
+	ui.NewStatic(modal, ui.OptsStatic().
+		Text(msg).
+		Position(ui.Dpi(32, 66)).
+		Size(ui.Dpi(576, 22)).
+		CtrlStyle(co.SS_LEFT|co.SS_CENTERIMAGE))
+	ui.NewStatic(modal, ui.OptsStatic().
+		Text("文件：").
+		Position(ui.Dpi(32, 94)).
+		Size(ui.Dpi(576, 20)).
+		CtrlStyle(co.SS_LEFT|co.SS_CENTERIMAGE))
+	ui.NewStatic(modal, ui.OptsStatic().
+		Text(filepath.Base(path)).
+		Position(ui.Dpi(32, 116)).
+		Size(ui.Dpi(576, 20)).
+		CtrlStyle(co.SS_LEFT|co.SS_CENTERIMAGE|co.SS_ENDELLIPSIS))
+	ui.NewStatic(modal, ui.OptsStatic().
+		Text(filepath.Dir(path)).
+		Position(ui.Dpi(32, 138)).
+		Size(ui.Dpi(576, 20)).
+		CtrlStyle(co.SS_LEFT|co.SS_CENTERIMAGE|co.SS_PATHELLIPSIS))
 
+	btnOpen := ui.NewButton(modal, ui.OptsButton().
+		Text("打开所在目录").
+		Position(ui.Dpi(192, 176)).
+		Width(ui.DpiX(120)))
 	btnClose := ui.NewButton(modal, ui.OptsButton().
 		Text("关闭").
-		Position(ui.Dpi(275, 178)).
+		Position(ui.Dpi(334, 176)).
 		Width(ui.DpiX(90)))
+	btnOpen.On().BnClicked(func() {
+		_ = exec.Command("explorer.exe", "/select,", path).Start()
+	})
 	btnClose.On().BnClicked(func() {
 		modal.Hwnd().PostMessage(co.WM_CLOSE, 0, 0)
 	})
@@ -178,10 +200,6 @@ func (a *nativeApp) showExportSuccess(msg, path string) {
 		if p.VirtualKeyCode() == co.VK_ESCAPE && !p.IsReleasingKey() {
 			modal.Hwnd().PostMessage(co.WM_CLOSE, 0, 0)
 		}
-	})
-	modal.On().WmCreate(func(_ ui.WmCreate) int {
-		detail.SetText(msg + "\r\n\r\n文件：\r\n" + path)
-		return 0
 	})
 	modal.ShowModal()
 }
