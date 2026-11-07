@@ -142,8 +142,11 @@ func (a *nativeApp) exportDone(err error, path string, n int, start time.Time, l
 			return
 		}
 		msg := fmt.Sprintf("已导出 %s 条%s · %s", commaInt(n), label, time.Since(start).Round(time.Millisecond))
-		a.setStatus(msg)
+		a.setStatus("就绪")
 		appPrintf("%s -> %s", msg, path)
+		a.message("导出 CSV",
+			fmt.Sprintf("导出成功\n\n%s\n\n文件：\n%s", msg, path),
+			co.MB_OK|co.MB_ICONINFORMATION)
 	})
 }
 
