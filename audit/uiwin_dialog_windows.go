@@ -166,7 +166,6 @@ func (a *nativeApp) showExportSuccess(msg, path string) {
 		Height(ui.DpiY(92)).
 		CtrlStyle(co.ES_MULTILINE|co.ES_READONLY|co.ES_AUTOVSCROLL).
 		WndStyle(co.WS_CHILD|co.WS_VISIBLE|co.WS_BORDER|co.WS_VSCROLL))
-	detail.SetText(msg + "\r\n\r\n文件：\r\n" + path)
 
 	btnClose := ui.NewButton(modal, ui.OptsButton().
 		Text("关闭").
@@ -179,6 +178,10 @@ func (a *nativeApp) showExportSuccess(msg, path string) {
 		if p.VirtualKeyCode() == co.VK_ESCAPE && !p.IsReleasingKey() {
 			modal.Hwnd().PostMessage(co.WM_CLOSE, 0, 0)
 		}
+	})
+	modal.On().WmCreate(func(_ ui.WmCreate) int {
+		detail.SetText(msg + "\r\n\r\n文件：\r\n" + path)
+		return 0
 	})
 	modal.ShowModal()
 }
