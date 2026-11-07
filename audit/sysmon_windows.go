@@ -29,6 +29,9 @@ import (
 //go:embed data/sysmon/win7/Sysmon.exe data/sysmon/win7/Sysmon64.exe data/sysmon/win81/Sysmon.exe data/sysmon/win81/Sysmon64.exe data/sysmon/win10/Sysmon.exe data/sysmon/win10/Sysmon64.exe data/sysmon/win10/Sysmon64a.exe
 var sysmonBins embed.FS
 
+//go:embed uiwin/sysmon-dns.xml
+var sysmonDNSConfigXML string
+
 const (
 	sysmonChannel = defaultChannel
 	defaultLogMax = int64(2) << 30 // 2 GiB
@@ -36,25 +39,26 @@ const (
 
 // SysmonStatus 供界面展示 Sysmon 安装状态与日志信息。
 type SysmonStatus struct {
-	Supported     bool   `json:"supported"`
-	Installed     bool   `json:"installed"`
-	ServiceExists bool   `json:"serviceExists"`
-	ServiceName   string `json:"serviceName,omitempty"`
-	Channel       string `json:"channel"`
-	ChannelExists bool   `json:"channelExists"`
-	LogPath       string `json:"logPath"`
-	LogBytes      int64  `json:"logBytes"`
-	MaxBytes      int64  `json:"maxBytes"`
-	Admin         bool   `json:"admin"`
-	OSVersion     string `json:"osVersion"`
-	Arch          string `json:"arch"`
-	Package       string `json:"package"`
-	PackageFile   string `json:"packageFile"`
-	ArgsText      string `json:"argsText"`
-	EffectiveArgs string `json:"effectiveArgs"`
-	DNSSupported  bool   `json:"dnsSupported"`
-	DNSEnabled    bool   `json:"dnsEnabled"`
-	Error         string `json:"error,omitempty"`
+	Supported      bool   `json:"supported"`
+	Installed      bool   `json:"installed"`
+	ServiceExists  bool   `json:"serviceExists"`
+	ServiceName    string `json:"serviceName,omitempty"`
+	ServiceRunning bool   `json:"serviceRunning"`
+	Channel        string `json:"channel"`
+	ChannelExists  bool   `json:"channelExists"`
+	LogPath        string `json:"logPath"`
+	LogBytes       int64  `json:"logBytes"`
+	MaxBytes       int64  `json:"maxBytes"`
+	Admin          bool   `json:"admin"`
+	OSVersion      string `json:"osVersion"`
+	Arch           string `json:"arch"`
+	Package        string `json:"package"`
+	PackageFile    string `json:"packageFile"`
+	ArgsText       string `json:"argsText"`
+	EffectiveArgs  string `json:"effectiveArgs"`
+	DNSSupported   bool   `json:"dnsSupported"`
+	DNSEnabled     bool   `json:"dnsEnabled"`
+	Error          string `json:"error,omitempty"`
 }
 
 // channelExists 判断指定日志通道是否已存在（即 Sysmon 已安装并注册）。
@@ -82,6 +86,7 @@ func sysmonStatus(dataDir string) SysmonStatus {
 	// 已安装 = 服务在 + 日志通道在，两个条件缺一都算没装好（残留服务或残留 evtx 都不算）。
 	st.ServiceName = installedSysmonService()
 	st.ServiceExists = st.ServiceName != ""
+	st.ServiceRunning = sysmonServiceRunning(st.ServiceName)
 	st.ChannelExists = channelExists(sysmonChannel)
 	st.Installed = st.ServiceExists && st.ChannelExists
 	st.LogPath, st.LogBytes = sysmonLogFile()
@@ -89,6 +94,14 @@ func sysmonStatus(dataDir string) SysmonStatus {
 		st.MaxBytes = sysmonMaxSize()
 	}
 	return st
+}
+
+func sysmonServiceRunning(name string) bool {
+	if name == "" {
+		return false
+	}
+	out, err := runHidden("sc", "query", name)
+	return err == nil && strings.Contains(strings.ToUpper(decodeWinText(out)), "RUNNING")
 }
 
 // sysmonLogFile 返回 Sysmon 日志文件路径与当前大小。
@@ -128,7 +141,7 @@ func sysmonSetLogSize(bytes int64) error {
 	if bytes < 64<<20 || bytes > 64<<30 {
 		return fmt.Errorf("日志大小需在 64MB 到 64GB 之间")
 	}
-	fmt.Printf("[Sysmon] 执行: wevtutil sl %s /ms:%d\n", sysmonChannel, bytes)
+	appPrintf("[Sysmon] 执行: wevtutil sl %s /ms:%d", sysmonChannel, bytes)
 	if _, err := runWevt("sl", sysmonChannel, "/ms:"+strconv.FormatInt(bytes, 10)); err != nil {
 		return err
 	}
@@ -229,11 +242,13 @@ func supportsDNS(v winVersionInfo) bool {
 func sysmonEffectiveArgs(dataDir string, dns bool) string {
 	parts := []string{"-accepteula", "-i"}
 	if dns {
-		cfg := filepath.Join(dataDir, dnsConfigName)
-		if strings.ContainsAny(cfg, " \t") {
-			cfg = `"` + cfg + `"`
+		cfg, err := writeDNSConfig(dataDir)
+		if err == nil {
+			if strings.ContainsAny(cfg, " \t") {
+				cfg = `"` + cfg + `"`
+			}
+			parts = append(parts, cfg)
 		}
-		parts = append(parts, cfg)
 	}
 	extra := sysmonExtraArgs(dataDir)
 	if !hasSysmonFlag(extra, "-n") {
@@ -269,16 +284,8 @@ func sysmonSetDNS(dataDir string, on bool) error {
 //  2. 空的 <NetworkConnect onmatch="include"/> 表示「只记录匹配的规则」，没有规则就一条都不记，
 //     要全量必须用 onmatch="exclude" 且不带子规则（排除 0 条 = 全收）。
 func writeDNSConfig(dataDir string) (string, error) {
-	xml := `<Sysmon schemaversion="4.50">
-  <EventFiltering>
-    <ProcessCreate onmatch="exclude"/>
-    <NetworkConnect onmatch="exclude"/>
-    <DnsQuery onmatch="exclude"/>
-  </EventFiltering>
-</Sysmon>
-`
 	p := filepath.Join(dataDir, dnsConfigName)
-	if err := os.WriteFile(p, []byte(xml), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte(sysmonDNSConfigXML), 0o644); err != nil {
 		return "", fmt.Errorf("写入 DNS 配置失败: %v", err)
 	}
 	return p, nil
@@ -434,20 +441,26 @@ func releaseSysmonBinary(dataDir, dir, exe string) (string, error) {
 	return dest, nil
 }
 
-func installSysmonPackage(dataDir, dir, exe string) error {
+func installSysmonPackage(dataDir, dir, exe string, useDNS bool) (string, error) {
 	dest, err := releaseSysmonBinary(dataDir, dir, exe)
 	if err != nil {
-		return err
+		return "", err
+	}
+	var logs []string
+	addLog := func(s string) {
+		if s = strings.TrimSpace(s); s != "" {
+			logs = append(logs, s)
+		}
 	}
 	// 固定 -accepteula -i，附加参数由界面保存。
 	// Win8.1+ 有 DNS Client ETW，安装时带一份只开 DnsQuery 的最小配置来采集 EID 22；
 	// Sysmon 没有 -dns 命令行开关（Win7 上更是没有 DNS 遥测）。
 	argv := []string{"-accepteula", "-i"}
 	// 10.2 没有 DnsQuery 事件（schema 上限 4.21），带配置会直接装不上。
-	if dir != "win7" && supportsDNS(windowsVersionInfo()) && sysmonDNSEnabled(dataDir) {
+	if useDNS && dir != "win7" && supportsDNS(windowsVersionInfo()) && sysmonDNSEnabled(dataDir) {
 		cfg, err := writeDNSConfig(dataDir)
 		if err != nil {
-			return err
+			return "", err
 		}
 		argv = append(argv, cfg)
 	}
@@ -457,22 +470,27 @@ func installSysmonPackage(dataDir, dir, exe string) error {
 		extra = append(extra, "-n")
 	}
 	argv = append(argv, extra...)
-	fmt.Printf("[Sysmon] 执行: %s %s\n", exe, strings.Join(argv, " "))
+	appPrintf("[Sysmon] 执行: %s %s", exe, strings.Join(argv, " "))
+	addLog("> " + exe + " " + strings.Join(argv, " "))
 	out, err := runHidden(dest, argv...)
+	addLog(decodeWinText(out))
 	printSysmonOut(out)
 	if err != nil {
-		return fmt.Errorf("%s 安装失败: %v %s", sysmonPackageLabel(dir), err, tailText(out))
+		return strings.Join(logs, "\r\n"),
+			fmt.Errorf("%s 安装失败: %v %s", sysmonPackageLabel(dir), err, tailText(out))
 	}
 	if err := sysmonSetLogSize(defaultLogMax); err != nil {
-		return fmt.Errorf("安装完成，但设置日志上限失败: %v", err)
+		return strings.Join(logs, "\r\n"), fmt.Errorf("安装完成，但设置日志上限失败: %v", err)
 	}
 	// 把当前生效的规则打印出来，便于确认配置真的生效（配置是整体替换，不是追加）。
 	if dump, e := runHidden(dest, "-c"); e == nil {
-		if s := strings.TrimSpace(string(dump)); s != "" {
-			fmt.Printf("[Sysmon] 当前配置:\n%s\n", indentText(s, "  "))
+		if s := strings.TrimSpace(decodeWinText(dump)); s != "" {
+			appPrintf("[Sysmon] 当前配置:\n%s", indentText(s, "  "))
+			addLog("> " + exe + " -c")
+			addLog(s)
 		}
 	}
-	return nil
+	return strings.Join(logs, "\r\n"), nil
 }
 
 // hasSysmonFlag 判断参数里是否已包含某个开关（兼容 -x=true 写法）。
@@ -490,22 +508,54 @@ func sysmonInstall(dataDir string) (string, error) {
 	if !isAdmin() {
 		return "", fmt.Errorf("需要管理员权限，请以管理员身份重新运行")
 	}
+	var logs []string
+	addLog := func(s string) {
+		if s = strings.TrimSpace(s); s != "" {
+			logs = append(logs, s)
+		}
+	}
+	joined := func() string { return strings.Join(logs, "\r\n") }
 	// 服务已存在就先卸载，避免 -i 在残留服务上直接失败（首次安装时这里不会触发）。
 	if svc := installedSysmonService(); svc != "" {
-		if _, err := sysmonUninstall(dataDir); err != nil {
-			return "", fmt.Errorf("卸载已有服务 %s 失败: %v", svc, err)
+		out, err := sysmonUninstall(dataDir)
+		addLog(out)
+		if err != nil {
+			return joined(), fmt.Errorf("卸载已有服务 %s 失败: %v", svc, err)
 		}
 	}
 	v := windowsVersionInfo()
 	dir, exe, err := sysmonPackageFor(v)
 	if err != nil {
-		return "", err
+		return joined(), err
 	}
-	err = installSysmonPackage(dataDir, dir, exe)
+	out, err := installSysmonPackage(dataDir, dir, exe, true)
+	addLog(out)
+	if err != nil && dir == "win10" && runtime.GOARCH == "amd64" {
+		// 某些机器上 64 位包的清单注册会被安全软件拦截；先从最简单的 64 位参数重试，
+		// 再回退到用户实测可用的 32 位 Sysmon.exe。
+		appPrintf("[Sysmon] 64 位安装失败，去掉 DNS 配置重试：%v", err)
+		out2, e2 := installSysmonPackage(dataDir, dir, exe, false)
+		addLog(out2)
+		if e2 == nil {
+			addLog("已安装 Sysmon 15.0（64 位，未启用 DNS 配置）")
+			return joined(), nil
+		} else {
+			appPrintf("[Sysmon] 64 位重试仍失败，回退 32 位：%v", e2)
+		}
+		out3, e3 := installSysmonPackage(dataDir, "win10", "Sysmon.exe", false)
+		addLog(out3)
+		if e3 == nil {
+			addLog("已回退安装 32 位 Sysmon 15.0（64 位包注册失败）")
+			return joined(), nil
+		}
+	}
 	// 个别 32 位 Win10 装不上新版时，退回 10.2 再试一次。
 	if err != nil && runtime.GOARCH == "386" && dir == "win10" {
-		if e2 := installSysmonPackage(dataDir, "win7", "Sysmon.exe"); e2 == nil {
-			return "Sysmon 15.0 安装失败，已回退安装 Sysmon 10.2", nil
+		out2, e2 := installSysmonPackage(dataDir, "win7", "Sysmon.exe", false)
+		addLog(out2)
+		if e2 == nil {
+			addLog("Sysmon 15.0 安装失败，已回退安装 Sysmon 10.2")
+			return joined(), nil
 		}
 	}
 	// 2012/2012 R2、Win8/8.1 缺 SHA-2 补丁时 13.30 装不上，同样退回 10.2（这些系统没有 DNS 遥测）。
@@ -514,14 +564,18 @@ func sysmonInstall(dataDir string) (string, error) {
 		if runtime.GOARCH != "386" {
 			fallback = "Sysmon64.exe"
 		}
-		if e2 := installSysmonPackage(dataDir, "win7", fallback); e2 == nil {
-			return "Sysmon 13.30 安装失败（可能缺少 SHA-2 补丁 KB4474419），已回退安装 Sysmon 10.2", nil
+		out2, e2 := installSysmonPackage(dataDir, "win7", fallback, false)
+		addLog(out2)
+		if e2 == nil {
+			addLog("Sysmon 13.30 安装失败（可能缺少 SHA-2 补丁 KB4474419），已回退安装 Sysmon 10.2")
+			return joined(), nil
 		}
 	}
 	if err != nil {
-		return "", err
+		return joined(), err
 	}
-	return fmt.Sprintf("已安装 %s（%s）", sysmonPackageLabel(dir), exe), nil
+	addLog(fmt.Sprintf("已安装 %s（%s）", sysmonPackageLabel(dir), exe))
+	return joined(), nil
 }
 
 // sysmonUninstall 卸载已安装的 Sysmon 服务。
@@ -556,7 +610,7 @@ func sysmonUninstall(dataDir string) (string, error) {
 		if _, err := os.Stat(bin); err != nil {
 			continue
 		}
-		fmt.Printf("[Sysmon] 执行: %s -u force\n", filepath.Base(bin))
+		appPrintf("[Sysmon] 执行: %s -u force", filepath.Base(bin))
 		if out, err := runHiddenInput(bin, "y\n", "-u", "force"); err == nil {
 			printSysmonOut(out)
 			return tailText(out), nil
@@ -564,7 +618,7 @@ func sysmonUninstall(dataDir string) (string, error) {
 			printSysmonOut(out)
 			last = tailText(out)
 		}
-		fmt.Printf("[Sysmon] 执行: %s -u\n", filepath.Base(bin))
+		appPrintf("[Sysmon] 执行: %s -u", filepath.Base(bin))
 		if out, err := runHiddenInput(bin, "y\n", "-u"); err == nil {
 			printSysmonOut(out)
 			return tailText(out), nil
@@ -576,10 +630,10 @@ func sysmonUninstall(dataDir string) (string, error) {
 	return last, fmt.Errorf("卸载失败，请确认以管理员身份运行")
 }
 
-// printSysmonOut 把 Sysmon 的原始屏幕输出按行缩进打到控制台。
+// printSysmonOut 把 Sysmon 的原始输出按行缩进写入运行日志。
 func printSysmonOut(b []byte) {
-	if s := strings.TrimSpace(string(b)); s != "" {
-		fmt.Printf("[Sysmon] 输出:\n%s\n", indentText(s, "  "))
+	if s := strings.TrimSpace(decodeWinText(b)); s != "" {
+		appPrintf("[Sysmon] 输出:\n%s", indentText(s, "  "))
 	}
 }
 
@@ -628,31 +682,31 @@ func promptInstallSysmon(dataDir string) bool {
 	v := windowsVersionInfo()
 	dir, exe, err := sysmonPackageFor(v)
 	if err != nil {
-		fmt.Printf("当前系统 Windows %s 暂不支持自动安装 Sysmon：%v\n", v.Str, err)
+		appPrintf("当前系统 Windows %s 暂不支持自动安装 Sysmon：%v", v.Str, err)
 		return false
 	}
-	fmt.Printf("当前系统 Windows %s（%s），将安装 %s / %s\n", v.Str, archLabel(), sysmonPackageLabel(dir), exe)
+	appPrintf("当前系统 Windows %s（%s），将安装 %s / %s", v.Str, archLabel(), sysmonPackageLabel(dir), exe)
 	if !isAdmin() {
-		fmt.Println("安装 Sysmon 需要管理员权限，请右键以管理员身份重新运行；也可稍后在界面「采集」页安装。")
+		appPrintln("安装 Sysmon 需要管理员权限，请右键以管理员身份重新运行；也可稍后在界面「采集」页安装。")
 		return false
 	}
 	if !stdinIsTerminal() {
-		fmt.Println("未检测到 Sysmon 日志，可在界面「采集」页安装。")
+		appPrintln("未检测到 Sysmon 日志，可在界面「采集」页安装。")
 		return false
 	}
-	fmt.Print("是否现在安装 Sysmon 并开启实时采集？[y/N] ")
+	appPrint("是否现在安装 Sysmon 并开启实时采集？[y/N] ")
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes", "是":
 	default:
-		fmt.Println("已跳过安装，可在界面「采集」页稍后安装。")
+		appPrintln("已跳过安装，可在界面「采集」页稍后安装。")
 		return false
 	}
 	if out, err := sysmonInstall(dataDir); err != nil {
-		fmt.Printf("安装失败: %v\n%s\n", err, out)
+		appPrintf("安装失败: %v\n%s", err, out)
 		return false
 	}
-	fmt.Println("Sysmon 安装完成，日志上限已设为 2 GB")
+	appPrintln("Sysmon 安装完成，日志上限已设为 2 GB")
 	return true
 }
 
@@ -683,7 +737,7 @@ func runHiddenInput(name, stdin string, args ...string) ([]byte, error) {
 }
 
 func tailText(b []byte) string {
-	s := strings.TrimSpace(string(b))
+	s := strings.TrimSpace(decodeWinText(b))
 	if len(s) > 500 {
 		s = s[len(s)-500:]
 	}

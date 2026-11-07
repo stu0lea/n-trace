@@ -16,7 +16,12 @@ var embeddedGeoGz []byte
 
 type geoDB struct {
 	s     *xdb.Searcher
-	cache map[string]string
+	cache map[string]geoInfo
+}
+
+type geoInfo struct {
+	Display string
+	Country string
 }
 
 func openGeo(path string) (*geoDB, error) {
@@ -46,24 +51,44 @@ func openGeo(path string) (*geoDB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &geoDB{s: s, cache: map[string]string{}}, nil
+	return &geoDB{s: s, cache: map[string]geoInfo{}}, nil
 }
 
 func (g *geoDB) Lookup(ip string) string {
+	display, _ := g.LookupInfo(ip)
+	return display
+}
+
+// LookupInfo 返回可读归属地和两位国家/地区代码（如 CN、US、HK）。
+func (g *geoDB) LookupInfo(ip string) (display, country string) {
 	if g == nil || g.s == nil || ip == "" {
-		return ""
+		return "", ""
 	}
 	if v, ok := g.cache[ip]; ok {
-		return v
+		return v.Display, v.Country
 	}
-	res := ""
+	info := geoInfo{}
 	if net.ParseIP(ip) != nil {
 		if raw, err := g.s.Search(ip); err == nil {
-			res = formatRegion(raw)
+			info.Display = formatRegion(raw)
+			info.Country = regionCountry(raw)
 		}
 	}
-	g.cache[ip] = res
-	return res
+	g.cache[ip] = info
+	return info.Display, info.Country
+}
+
+func regionCountry(raw string) string {
+	parts := strings.Split(raw, "|")
+	if len(parts) < 2 {
+		return ""
+	}
+	last := strings.TrimSpace(parts[len(parts)-1])
+	if len(last) == 2 && last == strings.ToUpper(last) &&
+		last[0] >= 'A' && last[0] <= 'Z' && last[1] >= 'A' && last[1] <= 'Z' {
+		return last
+	}
+	return ""
 }
 
 // formatRegion 把 "中国|河南省|郑州市|联通|CN" 整理成可读归属地。

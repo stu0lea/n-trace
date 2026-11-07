@@ -27,7 +27,7 @@ func runWevt(args ...string) ([]byte, error) {
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(errb.String())
+		msg := strings.TrimSpace(decodeWinText(errb.Bytes()))
 		if msg == "" {
 			msg = err.Error()
 		}
@@ -61,6 +61,18 @@ func liveQuery(channel string, after int64, max int) ([]rawEvent, error) {
 		return nil, err
 	}
 	return parseXMLEvents(b), nil
+}
+
+// liveQueryAfter 按记录号从小到大读取历史事件，用于启动时补读。
+func liveQueryAfter(channel string, after int64, max int) ([]rawEvent, error) {
+	q := fmt.Sprintf(`*[System[(EventID=1 or EventID=3 or EventID=22) and EventRecordID>%d]]`, after)
+	b, err := runWevt("qe", channel, "/q:"+q, "/f:xml", "/c:"+strconv.Itoa(max))
+	if err != nil {
+		return nil, err
+	}
+	evs := parseXMLEvents(b)
+	appPrintf("补读查询：after=%d bytes=%d events=%d", after, len(b), len(evs))
+	return evs, nil
 }
 
 // liveWarmup 读取最近的进程创建与 DNS 事件，用于补齐进程命令行和域名关联。

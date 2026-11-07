@@ -2,7 +2,6 @@ package main
 
 import (
 	"embed"
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +24,7 @@ var ruleText = map[string]string{
 	"R3": "临时/下载目录进程外联",
 	"R4": "直接连接公网 IP（无域名）",
 	"R5": "短时间大量外联目标",
+	"R6": "连接境外 IP（非中国大陆）",
 }
 
 type server struct {
@@ -34,10 +34,11 @@ type server struct {
 	dataDir  string
 	channel  string
 	interval time.Duration
-	warmup   int
 
 	liveMu sync.Mutex
 	live   *LiveStats
+
+	quit chan struct{}
 }
 
 // enableLive 启动实时采集（幂等）。返回是否本次真正启动。
@@ -50,13 +51,13 @@ func (s *server) enableLive() bool {
 	if err := liveSupported(); err != nil {
 		return false
 	}
-	cfg := liveConfig{Channel: s.channel, Interval: s.interval, Warmup: s.warmup}
+	cfg := liveConfig{Channel: s.channel, Interval: s.interval, DataDir: s.dataDir}
 	if cfg.Channel == "" {
 		cfg.Channel = defaultChannel
 	}
 	st := &LiveStats{}
 	s.live = st
-	go startLive(s.db, st, cfg, func(f string, a ...interface{}) { fmt.Printf(f+"\n", a...) })
+	go startLive(s.db, st, cfg, func(f string, a ...interface{}) { appPrintf(f, a...) })
 	return true
 }
 
@@ -76,6 +77,7 @@ func (s *server) routes() http.Handler {
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 	mux.HandleFunc("/api/meta", s.handleMeta)
 	mux.HandleFunc("/api/summary", s.handleSummary)
+	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/conns", s.handleConns)
 	mux.HandleFunc("/api/procs", s.handleProcs)
 	mux.HandleFunc("/api/dns", s.handleDNS)
@@ -83,7 +85,10 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/api/export", s.handleExport)
 	mux.HandleFunc("/api/import", s.handleImport)
 	mux.HandleFunc("/api/import/upload", s.handleUpload)
+	mux.HandleFunc("/api/source/delete", s.handleSourceDelete)
 	mux.HandleFunc("/api/live", s.handleLive)
+	mux.HandleFunc("/api/live/toggle", s.handleLiveToggle)
+	mux.HandleFunc("/api/exit", s.handleExit)
 	mux.HandleFunc("/api/sysmon", s.handleSysmon)
 	mux.HandleFunc("/api/sysmon/install", s.handleSysmonInstall)
 	mux.HandleFunc("/api/sysmon/args", s.handleSysmonArgs)
@@ -124,6 +129,40 @@ func (s *server) handleLive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, s.live.snapshot())
+}
+
+func (s *server) handleLiveToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	s.liveMu.Lock()
+	running := s.live != nil
+	s.liveMu.Unlock()
+	if running {
+		s.disableLive()
+		writeJSON(w, map[string]interface{}{"enabled": false})
+		return
+	}
+	started := s.enableLive()
+	writeJSON(w, map[string]interface{}{"enabled": started})
+}
+
+func (s *server) handleExit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, map[string]interface{}{"ok": true})
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		if s.quit != nil {
+			select {
+			case s.quit <- struct{}{}:
+			default:
+			}
+		}
+	}()
 }
 
 func (s *server) handleSysmon(w http.ResponseWriter, r *http.Request) {
@@ -255,6 +294,34 @@ func (s *server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, sm)
 }
 
+func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
+	tab := r.URL.Query().Get("tab")
+	expr := r.URL.Query().Get("expr")
+	switch tab {
+	case "procs":
+		st, err := s.db.ProcessStats(expr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, st)
+	case "dns":
+		st, err := s.db.DNSStats(expr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, st)
+	default:
+		st, err := s.db.IRStats(expr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, st)
+	}
+}
+
 func intParam(r *http.Request, k string, def int) int {
 	if v, err := strconv.Atoi(r.URL.Query().Get(k)); err == nil && v >= 0 {
 		return v
@@ -280,60 +347,78 @@ func (s *server) handleConns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleProcs(w http.ResponseWriter, r *http.Request) {
-	expr := r.URL.Query().Get("expr")
-	where, args, err := s.db.compile(expr)
+	q := r.URL.Query()
+	expr := q.Get("expr")
+	limit := intParam(r, "limit", 800)
+	if limit > 2000 {
+		limit = 2000
+	}
+	total, err := s.db.CountProcessesFiltered(expr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	q := `SELECT guid, coalesce(nullif(image,''),'System') image, user, cmdline, parent, hashes,
-		count(*) n, coalesce(sum(public),0) pub, count(DISTINCT dst_ip) ips,
-		min(ts) first, max(ts) last, sum(CASE WHEN risk!='' THEN 1 ELSE 0 END) risky
-		FROM conn WHERE ` + where + ` GROUP BY guid ORDER BY n DESC LIMIT 800`
-	rows, err := s.db.sql.Query(q, args...)
+	sortField := q.Get("sort")
+	if sortField == "" {
+		sortField = "start"
+	}
+	desc := q.Get("desc") != "0"
+	rows, err := s.db.PageProcs(expr, limit, intParam(r, "offset", 0), sortField, desc)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	defer rows.Close()
-	type procRow struct {
-		Guid    string `json:"guid"`
-		Image   string `json:"image"`
-		User    string `json:"user"`
-		CmdLine string `json:"cmdLine"`
-		Parent  string `json:"parent"`
-		Hashes  string `json:"hashes"`
-		N       int    `json:"n"`
-		Pub     int    `json:"pub"`
-		IPs     int    `json:"ips"`
-		First   int64  `json:"first"`
-		Last    int64  `json:"last"`
-		Risky   int    `json:"risky"`
+	if rows == nil {
+		rows = []procRow{}
 	}
-	out := []procRow{}
-	for rows.Next() {
-		var p procRow
-		if err := rows.Scan(&p.Guid, &p.Image, &p.User, &p.CmdLine, &p.Parent, &p.Hashes, &p.N, &p.Pub, &p.IPs, &p.First, &p.Last, &p.Risky); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		out = append(out, p)
-	}
-	writeJSON(w, map[string]interface{}{"total": len(out), "rows": out})
+	writeJSON(w, map[string]interface{}{"total": total, "rows": rows})
 }
 
 func (s *server) handleDNS(w http.ResponseWriter, r *http.Request) {
-	rows, total, err := s.db.QueryDNS(r.URL.Query().Get("q"), intParam(r, "limit", 300))
+	q := r.URL.Query()
+	expr := q.Get("expr")
+	if expr == "" {
+		expr = q.Get("q")
+	}
+	limit := intParam(r, "limit", 256)
+	if limit > 2000 {
+		limit = 2000
+	}
+	total, err := s.db.CountDNSFiltered(expr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	sortField := q.Get("sort")
+	if sortField == "" {
+		sortField = "ts"
+	}
+	desc := q.Get("desc") != "0"
+	rows, err := s.db.PageDNS(expr, limit, intParam(r, "offset", 0), sortField, desc)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rows == nil {
+		rows = []*DNSQ{}
 	}
 	writeJSON(w, map[string]interface{}{"total": total, "rows": rows})
 }
 
 func (s *server) handleValues(w http.ResponseWriter, r *http.Request) {
 	field := r.URL.Query().Get("field")
-	vals, err := s.db.Values(field, intParam(r, "limit", 20))
+	var (
+		vals []Count
+		err  error
+	)
+	switch r.URL.Query().Get("tab") {
+	case "procs":
+		vals, err = s.db.ProcessValues(field, intParam(r, "limit", 10))
+	case "dns":
+		vals, err = s.db.DNSValues(field, intParam(r, "limit", 10))
+	default:
+		vals, err = s.db.Values(field, intParam(r, "limit", 10))
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -342,38 +427,26 @@ func (s *server) handleValues(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleExport(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.ExportRows(r.URL.Query().Get("expr"))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	tab := r.URL.Query().Get("tab")
+	if tab == "" {
+		tab = "conns"
 	}
-	defer rows.Close()
+	expr := r.URL.Query().Get("expr")
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"trace-audit-%s.csv\"", time.Now().Format("20060102-150405")))
-	w.Write([]byte{0xEF, 0xBB, 0xBF})
-	cw := csv.NewWriter(w)
-	cw.Write([]string{"时间", "主机", "进程", "命令行", "用户", "PID", "协议", "方向", "源IP", "源端口", "目的IP", "目的端口", "域名", "端口名", "归属地", "公网", "风险规则", "进程哈希"})
-	for rows.Next() {
-		c, err := scanConnWithRaw(rows, false)
-		if err != nil {
-			break
-		}
-		dir := "入站"
-		if c.Out {
-			dir = "出站"
-		}
-		pub := "内网"
-		if c.Public {
-			pub = "公网"
-		}
-		cw.Write([]string{
-			time.UnixMilli(c.TS).In(s.loc).Format("2006-01-02 15:04:05.000"),
-			c.Host, c.Image, c.CmdLine, c.User, c.PID, c.Proto, dir,
-			c.SrcIP, c.SrcPort, c.DstIP, c.DstPort, c.DstHost, c.PortNm, c.Geo, pub,
-			strings.Join(c.Risk, " "), c.Hashes,
-		})
+	w.Header().Set("Content-Disposition", fmt.Sprintf(
+		"attachment; filename=\"n-trace-%s-%s.csv\"", tab, time.Now().Format("20060102-150405")))
+	var err error
+	switch tab {
+	case "procs":
+		_, err = exportProcessCSV(s.db, w, expr, s.loc, nil)
+	case "dns":
+		_, err = exportDNSCSV(s.db, w, expr, s.loc, nil)
+	default:
+		_, err = exportCSV(s.db, w, expr, s.loc, nil)
 	}
-	cw.Flush()
+	if err != nil {
+		appPrintf("导出 CSV 失败: %v", err)
+	}
 }
 
 func (s *server) handleImport(w http.ResponseWriter, r *http.Request) {
@@ -396,6 +469,24 @@ func (s *server) handleImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, stats)
 }
 
+func (s *server) handleSourceDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		http.Error(w, "缺少 name", http.StatusBadRequest)
+		return
+	}
+	conns, dns, err := s.db.DeleteSource(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]interface{}{"ok": true, "name": name, "conns": conns, "dns": dns})
+}
+
 // handleUpload 接收浏览器上传的 .evtx（浏览器拿不到本地路径），
 // 落到临时目录后走同一套导入管线。
 func (s *server) handleUpload(w http.ResponseWriter, r *http.Request) {
@@ -407,7 +498,7 @@ func (s *server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "解析上传内容失败: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	dir, err := os.MkdirTemp("", "trace-audit-")
+	dir, err := os.MkdirTemp("", "n-trace-")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -1,149 +1,188 @@
-# Trace-Audit
+# N-trace 开发与架构说明
 
-基于 Sysmon 的网络连接审计工具。单文件、离线、自包含；导入 `.evtx` 后在本地网页里检视全部网络连接，Windows 下检测到 Sysmon 日志会自动开始实时采集。
+本目录包含 N-trace 的主要 Go 源码、Windows 原生界面、Web 调试界面、内置数据和资源文件。
 
-## 快速开始
+用户安装和使用说明请先阅读仓库根目录的 [README.md](../README.md)。
 
-```bash
-# 直接启动（自动打开浏览器，数据存到程序目录 trace-audit-data/）
-trace-audit_windows_amd64.exe
+## 技术栈
 
-# 启动前导入日志（可给文件或目录，目录只取 .evtx）
-trace-audit_windows_amd64.exe D:\case\
+- Go 1.20
+- SQLite WAL，驱动为 `modernc.org/sqlite`
+- FTS5 trigram 全文索引
+- Windows 原生 Win32 UI，使用 `github.com/rodrigocfd/windigo`
+- EVTX 解析使用 `www.velocidex.com/golang/evtx`
+- IP 归属地使用内置 `ip2region`
+- Sysmon 日志通过 `wevtutil` 轮询读取
 
-# 固定端口、不弹浏览器、指定数据目录
-trace-audit_windows_amd64.exe -addr 127.0.0.1:8899 -no-open -data D:\case\db D:\case\sysmon.evtx
+## 启动流程
 
-# 用外部 IP 库
-trace-audit_windows_amd64.exe -geo D:\ip2region_v4.xdb
+1. 解析命令行和数据目录。
+2. 加载或创建 `config.ini`。
+3. 初始化按月归档的应用日志。
+4. 获取单实例锁。
+5. 打开内置 IP 库和 SQLite 数据库。
+6. 导入命令行指定的 `.evtx`。
+7. Windows 默认进入原生 UI；其他平台或指定 `-web` 时进入浏览器界面。
+
+原生 UI 启动后会检测 Sysmon 状态，并询问是否安装或修复。实时读取默认自动开启。
+
+## 主要模块
+
+| 文件 | 职责 |
+|---|---|
+| `main.go` | 参数解析、初始化、导入、原生/Web UI 选择 |
+| `config.go` | `config.ini` 加载、校验和保存 |
+| `log.go` | GUI 运行日志、按月归档和保留清理 |
+| `parse.go` | EVTX 读取和 Sysmon 原始事件解析 |
+| `model.go` | 连接、进程、DNS 数据模型和风险规则 |
+| `db.go` | SQLite schema、迁移、入库、查询、统计和 FTS |
+| `live.go` | 实时轮询循环、断点、补读和状态统计 |
+| `live_windows.go` | `wevtutil` 查询实现 |
+| `sysmon_windows.go` | Sysmon 状态、安装、卸载和日志配置 |
+| `export.go` | 当前页签筛选结果的 CSV 导出 |
+| `source_delete.go` | 删除本地导入日志源及其数据 |
+| `uiwin_app_windows.go` | 原生主窗口、控件布局和业务联动 |
+
+## SQLite 结构
+
+### 数据表
+
+- `conn`：EID 3 网络连接。
+- `dns`：EID 22 DNS 查询。
+- `process_event`：EID 1 进程创建和 EID 5 进程结束原始事件。
+- `process_list`：按进程 GUID 聚合的进程视图，供进程页签快速分页。
+- `process_ip`：进程到目标 IP 的集合，用于目的 IP 数统计。
+- `file`：本地导入日志源清单。
+- `rawfield`：Sysmon 原始字段索引。
+- `app_meta`：数据库迁移版本等内部元数据。
+
+### 索引
+
+连接、DNS 和进程聚合表均有面向时间倒序分页的复合索引。连接全文搜索使用 `conn_fts`，字段包括：
+
+```text
+image, cmdline, dst_host, geo, dst_ip
 ```
 
-| 参数 | 说明 |
-|---|---|
-| `-addr` | 监听地址，默认 `127.0.0.1:0`（随机端口） |
-| `-data` | 数据目录，默认程序同目录下的 `trace-audit-data` |
-| `-geo` | 外部 `ip2region_v4.xdb`，默认使用内置库 |
-| `-no-open` | 启动后不自动打开浏览器 |
-| `-q` | 不打印启动与导入摘要 |
-| `-channel` | 实时采集的日志通道，默认 `Microsoft-Windows-Sysmon/Operational` |
-| `-live-interval` | 实时轮询间隔，默认 `1s` |
-| `-live-warmup` | 启动时补读的最近进程/DNS 事件数，默认 `2000`，`0` 表示不补读 |
+### 唯一性
 
-启动后终端会打印带临时 token 的地址，只有拿到该地址的浏览器能访问，服务只监听回环地址。
+- 连接：`(guid, ts, dst_ip, dst_port, proto)`
+- 进程事件：`(guid, event_id, ts)`
+- DNS：规范化后的时间、主机、GUID、域名、结果和状态
 
-## 界面
+入库使用 `INSERT OR IGNORE`，重复补读不会创建重复记录。
 
-- **概览**：连接数、公网连接、进程数、风险统计、连接趋势，以及 Top 进程 / 端口 / 归属地 / 目的 IP。
-- **连接**：五元组按协议、源 IP、源端口、目的 IP、目的端口分列；行末「详情」按钮打开完整字段抽屉。
-- **进程**：按进程聚合的连接数、公网连接数、目的 IP 数与风险条数。
-- **DNS**：EID 22 查询记录、解析结果与状态。
-- **告警**：R1–R5 风险规则命中明细。
-- **采集**：实时采集状态、Sysmon 安装/重装/卸载、安装参数、日志上限、数据源。
+## 实时读取
 
-右上角可切换浅色 / 暗色主题，默认浅色，选择会记在浏览器本地。
+实时读取只查询以下 Sysmon 事件：
 
-## 导入日志
+```text
+EventID=1 or EventID=3 or EventID=22
+```
 
-点右上角「导入 evtx」会弹出系统文件选择框，支持多选，也可以把 `.evtx` 直接拖进弹窗。只接受 `.evtx`；浏览器拿不到本地完整路径时，数据源里会标记为「浏览器上传」。
+断点保存在数据目录的 `live-last-id.txt`，内容为最后成功处理的 `EventRecordID`。
 
-命令行也支持在启动前导入文件或目录。导入的每条记录以 `(ProcessGuid, 时间, 目的IP, 目的端口, 协议)` 去重，重复导入同一文件不会产生重复行。
+处理顺序：
 
-「数据源」只显示文件名、路径和大小，不显示事件条数。
+1. 读取断点。
+2. 读取当前通道最新记录号。
+3. 断点有效时从断点之后补读。
+4. 断点缺失、为 0 或大于最新记录号时，从当前日志最早匹配记录开始。
+5. 每批成功入库后原子更新断点。
+6. 补读追平后进入增量轮询。
 
-## 检索
+暂停和关闭只停止采集 goroutine，不删除断点。
 
-一个输入框搞定所有筛选。`and`（或空格）是与，`or` 是或，`-` 是取反，括号可分组；优先级 NOT > AND > OR：
+## 查询引擎
 
-| 写法 | 含义 |
-|---|---|
-| `dst_port:443` | 端口包含 443（等价 LIKE '%443%'） |
-| `dst_port=443` | 端口精确等于 443 |
-| `dst_port>=8000` | 数值比较 |
-| `image:chrome*` | 通配 |
-| `-geo:北京` | 排除 |
-| `geo:"河南省 郑州市"` | 值含空格用引号 |
-| `ts>="2026-11-05 17:00"` | 时间范围 |
-| `微信` | 全文检索（进程/命令行/域名/归属地/IP） |
-| `dst_port:443 or dst_port:80` | 或（也可写 `\|`、`或`） |
-| `(proto:udp or proto:tcp) and geo:北京` | 括号分组 |
-| `not geo:北京` | 取反，等价于 `-geo:北京` |
-| `outbound:出站`、`public:1` | 布尔字段 |
+`db.go` 中的 `compile`、`compileDNS` 和 `compileProcess` 负责把查询文本转换为带参数的 SQL。
 
-界面里不用写表达式：条件栏最前面选 `and` / `or`，再选字段、比较方式和值即可添加条件；条件会显示成标签，点 × 删除。点表格单元格或下方的热门取值，也会弹出 `and` / `or` 选择后加入条件。
+关键约束：
 
-23 个常用字段（时间/主机/进程/命令行/用户/PID/进程GUID/父进程/哈希/完整性/协议/方向/源IP/源端口/目的IP/目的端口/域名/端口名/归属地/公网/IPv6/规则名/风险）建了索引；其余 Sysmon 原始字段（`RuleName`、`DestinationPortName`、`Initiated` 等）按需从事件 JSON 提取，字段数量随事件类型动态变化。详情抽屉里的「全部事件字段」均可用于筛选。
+- 字段名必须通过白名单解析，避免 SQL 注入。
+- 条件之间必须显式写 `and`。
+- 支持 `or`、`not`、`-`、括号、字段比较和通配。
+- 原始 Sysmon 字段通过 JSON 提取，但只能使用已登记的字段。
+- 时间字段先转换为 Unix 毫秒再比较。
 
-## 实时采集
+## 共享虚拟表
 
-启动时自动检测 Sysmon，有日志就自动开始实时采集，不需要额外参数。每 1 秒增量读取一次 EID 1 进程创建、3 网络连接、22 DNS：
+连接、进程和 DNS 使用 `uiwin_shared_virtual_windows.go` 中的 owner-data 虚拟表实现。
 
-- 以 `EventRecordID` 作断点，不会重复采集；启动时先定位最新记录号，`-live-warmup` 默认补读最近 2000 条进程/DNS 事件，用于补全命令行与域名。
-- 读取 Sysmon 通道需要**管理员权限**，非管理员会看到「实时中断」及错误原因。
-- 界面右上角「实时 · N」徽标：绿点=采集中，红点=中断（悬停看错误）。
-- 采集与离线导入共用同一张表、同一套规则与检索，导入历史日志后可继续接实时数据。
-- 其他平台（macOS/Linux）只能导入 `.evtx`。
+- 每块 256 条。
+- 最多缓存 16 块。
+- 只查询当前可见块，避免一次加载全部结果。
+- 刷新时保留横向滚动位置，并按比例恢复纵向位置。
+- 快照 ID 或快照时间保证刷新期间分页结果稳定。
+- 选中行不会因为实时刷新被主动清除。
 
-启动时的判定逻辑：
+连接表使用数据库最大 ID 作为快照边界；进程和 DNS 使用快照时间。
 
-| 服务 | 日志通道 | 行为 |
-|---|---|---|
-| 有 | 有 | 直接开启实时采集 |
-| 有 | 无 | 自动卸载并重新安装 Sysmon |
-| 无 | 有 / 无 | 提示安装 Sysmon（残留旧日志不会当作已安装） |
+## 原生 UI
 
-## Sysmon 安装与日志
+原生 UI 位于 `uiwin_*_windows.go`。
 
-Windows 产物内置三档 Sysmon 安装包，双击运行后若未安装，终端会显示系统版本与将使用的安装包，并询问 `是否现在安装 Sysmon 并开启实时采集？[y/N]`；也可以稍后在界面「采集」页安装。
+- 页面主体使用连接、进程、DNS 三个 Tab。
+- 顶部语法框、字段条件、热门数据和刷新频率随当前 Tab 切换。
+- 表格右键按单元格字段添加 `AND` / `OR` 条件。
+- 数据统计弹窗根据当前 Tab 使用不同统计模型。
+- 日志源管理使用独立模态窗口。
+- Sysmon 安装、卸载等操作通过独立管理员任务进程执行。
 
-| 系统 | 版本 | 安装包 |
-|---|---|---|
-| Server 2008 / 2008 R2、Win7 | 6.0 / 6.1 | Sysmon 10.2（`Sysmon.exe` / `Sysmon64.exe`） |
-| Server 2012 / 2012 R2、Win8 / 8.1 | 6.2 / 6.3 | Sysmon 13.30（`Sysmon.exe` / `Sysmon64.exe`） |
-| Windows 10 / 11、Server 2016+ | >= 10.0 | Sysmon 15.0（含 ARM64 `Sysmon64a.exe`） |
+原生 UI 只在 Windows 下编译；其他平台使用 `ui_native_other.go` 和 Web UI。
 
-- 固定参数 `-accepteula -i`，附加参数默认 `-n`；缺少 `-n` 会自动补上（EID 3 必需）。
-- 页面输入框展示当前实际下发的完整命令行，保存后自动卸载重装。只允许应急常用开关（`-n -l -h -a -g -k -d -z -r -t`），非法参数会直接拒绝。
-- DNS 日志（EID 22）通过「启用 DNS 日志」开关控制：**Sysmon 没有 `-dns` 命令行开关**，勾选后安装时写入最小配置。该配置仅在 Win8.1+ 生效；Server 2012 / Win8（6.2）无 DNS 遥测，2008 / Win7 的 Sysmon 10.2 更没有 DnsQuery 事件。
-- 配置是整体替换规则集，不是追加。生成的 `sysmon-dns.xml` 对 `ProcessCreate` / `NetworkConnect` / `DnsQuery` 使用 `onmatch="exclude"` 且不带子规则（排除 0 条 = 全量记录）；写成空的 `onmatch="include"` 会导致这些事件一条都不记。
-- 13.30（2012 / 2012 R2 / Win8 / 8.1）在缺 SHA-2 补丁（KB4474419）的机器上装不上时，会自动回退安装 Sysmon 10.2，并在终端输出里说明。
-- 安装完成后自动把日志上限设为 **2 GB**。界面上按 GB 修改后点「保存」，通过 `wevtutil sl` 立即生效，不重启 Sysmon、不清空日志；可设置范围 64 MB–64 GB。
-- 已安装时按钮显示「重新安装」，未安装时显示「安装」；另有「卸载」。卸载会停止实时采集，但**不删除原始 evtx、不清空已有日志、不删除数据库**。
-- 安装 / 卸载的原始命令与输出只打印在终端，不在界面显示。
-- 安装、卸载、改日志大小需要以管理员身份运行本工具。
+## 风险计算
 
-## 导出 CSV
+连接风险在 `model.go` 中计算：
 
-「连接」页右上角的「导出 CSV」会导出**当前检索条件命中的全部连接**（不受分页影响），UTF-8 带 BOM，Excel 直接打开不乱码。
+- `R1` 非常规端口外联
+- `R2` 非浏览器访问 Web 端口
+- `R3` 临时/下载目录进程外联
+- `R4` 直接连接公网 IP 且没有域名
+- `R5` 短时间内大量外联目标
+- `R6` 连接境外 IP
 
-列固定为 18 个：时间、主机、进程、命令行、用户、PID、协议、方向、源 IP、源端口、目的 IP、目的端口、域名、端口名、归属地、公网、风险规则、进程哈希。
+DNS 风险：
 
-## 数据与规则
+- `D1` 解析境外 IP
+- `D2` 查询失败
+- `D3` 无解析结果
 
-- 用 EID 1 补全命令行、父进程、哈希；用 EID 22 的解析结果补域名。
-- 风险规则：R1 非常规端口外联、R2 非浏览器进程访问 Web 端口、R3 临时目录/下载目录进程外联、R4 直连公网 IP 且无域名、R5 5 分钟内连接 20 个以上不同公网 IP。
+风险只用于辅助排查，不应直接等同于恶意判定。
 
-## 存储
+## 数据目录
 
-`audit.db`（SQLite，WAL 模式）+ `conn_fts`（FTS5 trigram 全文索引）。可随时用 DB Browser for SQLite 打开做二次分析。
+开发运行时，默认使用仓库 `outputs/n-trace-data`：
 
-## 构建
+```text
+outputs/n-trace-data/
+  audit.db
+  config.ini
+  live-last-id.txt
+  sysmon-dns.xml
+  trace-audit.log
+```
+
+测试应使用 `t.TempDir()`，不要在测试中写入默认数据目录。
+
+## 测试与构建
+
+```powershell
+$env:GOPROXY = "https://goproxy.cn,direct"
+$env:GOOS = "windows"
+$env:GOARCH = "amd64"
+$env:CGO_ENABLED = "0"
+go test -count=1 .\audit
+```
+
+完整多平台构建：
 
 ```bash
 ./build.sh
 ```
 
-产物输出到 `outputs/`。Windows 版使用 Go 1.20（最后一个支持 Win7/8 的工具链）；macOS / Linux 使用本机 Go。
+`build.sh` 会临时复制 Windows manifest/resources 到 `audit/`，构建结束后自动清理，避免 `go test` 被管理员清单提权。
 
-## 已知限制
+## 第三方许可
 
-- 只支持 64 位平台（纯 Go 实现的 SQLite 不支持 32 位）。
-- EID 3 不含字节数与连接时长，统计流量需要额外的 `Microsoft-Windows-Kernel-Network` 事件源。
-- `DestinationHostname` 只有 IPv4 事件才有。
-- 实时采集基于 `wevtutil` 轮询，1 秒粒度，不是内核级订阅；极高速率（每秒上千事件）建议缩短 `-live-interval`。
-- 全文检索至少 3 个字符（trigram 限制），更短的词退化为模糊匹配。
-
-## 路线图
-
-1. 实时采集改用 `EvtSubscribe` 订阅，批量入库，界面增量刷新
-2. 终端实时分析（TUI）：同一套查询语法
-3. 告警输出：JSONL 流，便于对接 SIEM
+本仓库自有代码使用 MIT License。内置 Sysmon、IP 库和 Go 依赖保留各自许可证，具体见仓库根目录的 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。

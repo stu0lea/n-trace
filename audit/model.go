@@ -27,6 +27,7 @@ type Conn struct {
 	Out     bool              `json:"out"`
 	V6      bool              `json:"v6"`
 	Geo     string            `json:"geo"`
+	Country string            `json:"country,omitempty"`
 	Public  bool              `json:"public"`
 	CmdLine string            `json:"cmdLine"`
 	Parent  string            `json:"parent"`
@@ -34,6 +35,7 @@ type Conn struct {
 	Integ   string            `json:"integrity"`
 	Rule    string            `json:"ruleName"`
 	Risk    []string          `json:"risk"`
+	Source  string            `json:"source"`
 	Raw     map[string]string `json:"raw,omitempty"`
 }
 
@@ -48,7 +50,32 @@ type DNSQ struct {
 	Query   string            `json:"query"`
 	Results string            `json:"results"`
 	Status  string            `json:"status"`
+	Geo     string            `json:"geo"`
+	Country string            `json:"country"`
+	Risk    []string          `json:"risk"`
+	Rule    string            `json:"ruleName"`
 	Raw     map[string]string `json:"raw,omitempty"`
+}
+
+// ProcessEvent 是一条 Sysmon 进程创建/结束事件（EID 1/5）。
+type ProcessEvent struct {
+	EventID       int
+	TS            int64
+	Host          string
+	Guid          string
+	PID           string
+	Image         string
+	CmdLine       string
+	User          string
+	Integrity     string
+	Hashes        string
+	ParentGuid    string
+	ParentPID     string
+	ParentImage   string
+	ParentCmdLine string
+	Rule          string
+	Raw           map[string]string
+	Source        string
 }
 
 type ipDNS struct {
@@ -102,7 +129,7 @@ func connFromEvent(e *rawEvent, geo *geoDB) *Conn {
 	}
 	c.Public = isPublicIP(dst)
 	if c.Public {
-		c.Geo = geo.Lookup(dst)
+		c.Geo, c.Country = geo.LookupInfo(dst)
 	}
 	return c
 }
@@ -115,7 +142,31 @@ func dnsFromEvent(e *rawEvent) *DNSQ {
 	return &DNSQ{
 		TS: e.TS, Host: e.Host, PID: e.get("ProcessId"), Guid: e.get("ProcessGuid"),
 		Image: e.get("Image"), User: e.get("User"), Query: q,
-		Results: e.get("QueryResults"), Status: e.get("QueryStatus"),
+		Results: e.get("QueryResults"), Status: e.get("QueryStatus"), Rule: e.get("RuleName"),
+	}
+}
+
+func processEventFromRaw(e *rawEvent) *ProcessEvent {
+	eventID := 0
+	switch e.EID {
+	case "1":
+		eventID = 1
+	case "5":
+		eventID = 5
+	default:
+		return nil
+	}
+	guid := e.get("ProcessGuid")
+	if guid == "" {
+		return nil
+	}
+	return &ProcessEvent{
+		EventID: eventID, TS: e.TS, Host: e.Host, Guid: guid, PID: e.get("ProcessId"),
+		Image: e.get("Image"), CmdLine: e.get("CommandLine"), User: e.get("User"),
+		Integrity: e.get("IntegrityLevel"), Hashes: e.get("Hashes"),
+		ParentGuid: e.get("ParentProcessGuid"), ParentPID: e.get("ParentProcessId"),
+		ParentImage: e.get("ParentImage"), ParentCmdLine: e.get("ParentCommandLine"),
+		Rule: e.get("RuleName"), Raw: e.F,
 	}
 }
 
@@ -136,6 +187,54 @@ func dnsIPs(results string) []string {
 		out = append(out, m)
 	}
 	return out
+}
+
+const (
+	dnsRiskForeign = "D1"
+	dnsRiskFailed  = "D2"
+	dnsRiskEmpty   = "D3"
+)
+
+var dnsRuleText = map[string]string{
+	dnsRiskForeign: "解析境外 IP",
+	dnsRiskFailed:  "DNS 查询失败",
+	dnsRiskEmpty:   "无解析结果",
+}
+
+func dnsGeoRisk(results, status string, geo *geoDB) (display, country, risk string) {
+	ips := dnsIPs(results)
+	displays := []string{}
+	countries := []string{}
+	seenDisplay := map[string]bool{}
+	seenCountry := map[string]bool{}
+	foreign := false
+	for _, ip := range ips {
+		if !isPublicIP(ip) {
+			continue
+		}
+		d, c := geo.LookupInfo(ip)
+		if d != "" && !seenDisplay[d] {
+			seenDisplay[d] = true
+			displays = append(displays, d)
+		}
+		if c != "" && !seenCountry[c] {
+			seenCountry[c] = true
+			countries = append(countries, c)
+		}
+		if c != "" && !strings.EqualFold(c, "CN") {
+			foreign = true
+		}
+	}
+	risks := []string{}
+	if foreign {
+		risks = append(risks, dnsRiskForeign)
+	}
+	if status != "" && status != "0" {
+		risks = append(risks, dnsRiskFailed)
+	} else if len(ips) == 0 {
+		risks = append(risks, dnsRiskEmpty)
+	}
+	return strings.Join(displays, " / "), strings.Join(countries, "/"), strings.Join(risks, " ")
 }
 
 // ---------------------------------------------------------------- 风险规则
@@ -182,6 +281,9 @@ func judge(c *Conn) []string {
 	}
 	if c.Out && c.DstHost == "" {
 		r = append(r, "R4")
+	}
+	if c.Public && c.Country != "" && !strings.EqualFold(c.Country, "CN") {
+		r = append(r, "R6")
 	}
 	return r
 }

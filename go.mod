@@ -5,6 +5,7 @@ go 1.20
 require (
 	github.com/Velocidex/ordereddict v0.0.0-20261028034010-6857b08b4dab
 	github.com/lionsoul2014/ip2region/binding/golang v0.0.0-20261028042204-6a276cc7c4f9
+	github.com/rodrigocfd/windigo v0.2.7
 	modernc.org/sqlite v1.29.10
 	www.velocidex.com/golang/evtx v0.2.0
 )

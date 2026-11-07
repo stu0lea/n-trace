@@ -14,4 +14,8 @@ func liveQuery(channel string, after int64, max int) ([]rawEvent, error) {
 	return nil, errLiveUnsupported
 }
 
+func liveQueryAfter(channel string, after int64, max int) ([]rawEvent, error) {
+	return nil, errLiveUnsupported
+}
+
 func liveWarmup(channel string, max int) []rawEvent { return nil }

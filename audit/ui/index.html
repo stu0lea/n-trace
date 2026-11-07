@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trace-Audit · 网络连接审计</title>
+<title>N-trace 联网安全审计</title>
 <script>try{if(localStorage.getItem('ta-theme')==='dark')document.documentElement.dataset.theme='dark';}catch(e){}</script>
 <style>
 :root{
@@ -170,12 +170,13 @@ aside .foot{padding:10px 18px;border-top:1px solid var(--line);display:flex;gap:
 </head>
 <body>
 <header>
-  <div class="brand">TRACE<span>-AUDIT</span></div>
+  <div class="brand">N<span>-trace</span></div>
   <div class="ds" id="ds">加载中…</div>
   <div class="spacer"></div>
   <div class="live" id="liveBadge" style="display:none" title="实时采集"><span class="dot"></span><span id="liveText">实时</span></div>
   <button class="btn" id="themeBtn" title="切换浅色/暗色">☾ 暗色</button>
   <button class="btn" id="btnImport">导入 evtx</button>
+  <button class="btn" id="btnExit">退出程序</button>
   <input type="file" id="filePicker" accept=".evtx" multiple style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none">
 </header>
 <nav>
@@ -206,6 +207,7 @@ aside .foot{padding:10px 18px;border-top:1px solid var(--line);display:flex;gap:
       <input id="qexpr" class="expr" placeholder='image:weixin.exe and dst_port:443 or dst_port:80' autocomplete="off">
       <button class="btn primary" id="btnSearch">搜索</button>
       <button class="btn" id="btnReset">重置</button>
+      <button class="btn" id="btnSyntax">语法？</button>
       <div class="spacer"></div>
       <button class="btn" id="btnExport">导出 CSV</button>
     </div>
@@ -232,23 +234,59 @@ aside .foot{padding:10px 18px;border-top:1px solid var(--line);display:flex;gap:
     <div class="dim hint"><code>=</code> 等于 · <code>:</code> 包含 · <code>-</code> 排除 · <code>and</code> 并且 · <code>or</code> 或者 · <code>()</code> 分组 · 点单元格或热门值可加条件</div>
     <div class="card" style="padding:0;overflow:hidden">
       <table><thead><tr>
-        <th>时间</th><th>进程</th><th>用户</th><th>协议</th><th>方向</th><th>源 IP</th><th>源端口</th><th>目的 IP</th><th>目的端口</th><th>域名</th><th>归属地</th><th>风险</th><th></th>
+        <th>序号</th><th>时间</th><th>主机</th><th>PID</th><th>进程GUID</th><th>进程</th><th>用户</th><th>命令行</th><th>父进程</th><th>哈希</th><th>协议</th><th>方向</th><th>源 IP</th><th>源端口</th><th>目的 IP</th><th>目的端口</th><th>域名</th><th>归属地</th><th>完整性</th><th>规则</th><th>风险</th><th>来源</th><th></th>
       </tr></thead><tbody id="connRows"></tbody></table>
       <div class="pager"><span id="connTotal"></span><button id="prev">上一页</button><button id="next">下一页</button></div>
     </div>
   </section>
 
   <section id="tab-procs">
+    <div class="filters">
+      <input id="pExpr" class="expr" placeholder="进程检索：全局搜索或编写搜索语法，示例：image:*chrome.exe" autocomplete="off">
+      <button class="btn primary" id="pSearch">搜索</button>
+      <button class="btn" id="pReset">重置</button>
+      <button class="btn" id="pSyntax">语法？</button>
+      <div class="spacer"></div>
+      <button class="btn" id="pExport">导出 CSV</button>
+    </div>
+    <div class="condbar">
+      <select id="pJoin"><option value="or">或者 or</option><option value="and" selected>并且 and</option></select>
+      <select id="pField"><option value="">选择字段…</option></select>
+      <select id="pOp"><option value=":">包含</option><option value="=">等于</option><option value="!=">不等于</option></select>
+      <input id="pVal" placeholder="输入值，回车即添加" autocomplete="off">
+      <button class="btn" id="pAdd">＋ 添加条件</button>
+    </div>
+    <div class="chips" id="pConds"></div>
+    <div class="chips" id="pHot"></div>
+    <div class="dim hint"><code>=</code> 等于 · <code>:</code> 包含 · <code>!: </code> 不包含 · <code>and</code> 并且 · <code>or</code> 或者 · 点单元格或热门值可加条件</div>
     <div class="card" style="padding:0;overflow:hidden">
       <table><thead><tr>
-        <th>进程</th><th>用户</th><th>连接数</th><th>公网</th><th>目的IP数</th><th>首次</th><th>最近</th><th>风险</th><th></th>
+        <th>序号</th><th>进程</th><th>PID</th><th>用户</th><th>进程GUID</th><th>命令行</th><th>父进程</th><th>哈希</th><th>连接数</th><th>公网</th><th>目的IP数</th><th>启动</th><th>结束</th><th>风险</th><th>来源</th><th></th>
       </tr></thead><tbody id="procRows"></tbody></table>
     </div>
   </section>
 
   <section id="tab-dns">
+    <div class="filters">
+      <input id="dExpr" class="expr" placeholder="DNS 检索：全局搜索或编写搜索语法，示例：query:example.com" autocomplete="off">
+      <button class="btn primary" id="dSearch">搜索</button>
+      <button class="btn" id="dReset">重置</button>
+      <button class="btn" id="dSyntax">语法？</button>
+      <div class="spacer"></div>
+      <button class="btn" id="dExport">导出 CSV</button>
+    </div>
+    <div class="condbar">
+      <select id="dJoin"><option value="or">或者 or</option><option value="and" selected>并且 and</option></select>
+      <select id="dField"><option value="">选择字段…</option></select>
+      <select id="dOp"><option value=":">包含</option><option value="=">等于</option><option value="!=">不等于</option><option value="!:" >不包含</option></select>
+      <input id="dVal" placeholder="输入值，回车即添加" autocomplete="off">
+      <button class="btn" id="dAdd">＋ 添加条件</button>
+    </div>
+    <div class="chips" id="dConds"></div>
+    <div class="chips" id="dHot"></div>
+    <div class="dim hint"><code>=</code> 等于 · <code>:</code> 包含 · <code>!:</code> 不包含 · <code>and</code> 并且 · <code>or</code> 或者 · 点单元格或热门值可加条件</div>
     <div class="card" style="padding:0;overflow:hidden">
-      <table><thead><tr><th>时间</th><th>进程</th><th>查询域名</th><th>解析结果</th><th>状态</th><th></th></tr></thead><tbody id="dnsRows"></tbody></table>
+      <table><thead><tr><th>序号</th><th>时间</th><th>主机</th><th>PID</th><th>进程</th><th>用户</th><th>进程GUID</th><th>查询域名</th><th>解析结果</th><th>归属地</th><th>国家/地区</th><th>状态</th><th>规则</th><th>风险</th><th></th></tr></thead><tbody id="dnsRows"></tbody></table>
     </div>
   </section>
 
@@ -303,6 +341,12 @@ aside .foot{padding:10px 18px;border-top:1px solid var(--line);display:flex;gap:
     <div class="dim" style="font-size:12px;margin-top:10px">文件仅在本机解析，不会上传到网络。</div>
   </div>
 </div>
+<div class="modal" id="syntaxModal">
+  <div class="modal-box">
+    <div class="modal-head"><strong id="syntaxTitle">检索语法</strong><button class="btn" id="syntaxClose">关闭</button></div>
+    <div id="syntaxBody"></div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -312,10 +356,34 @@ const pad = n => String(n).padStart(2,'0');
 const fmtT = ts => { const d = new Date(ts); return `${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
 const fmtFull = ts => { const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
 const baseName = p => String(p||'').replace(/\\/g,'/').split('/').pop();
-const RULE = {R1:'非常规端口',R2:'非浏览器Web',R3:'临时目录',R4:'直连IP',R5:'大量外联'};
+const RULE = {R1:'非常规端口',R2:'非浏览器Web',R3:'临时目录',R4:'直连IP',R5:'大量外联',R6:'境外IP',D1:'解析境外IP',D2:'DNS失败',D3:'无解析结果'};
 const PAGE = 200;
 
-const state = { tab:'overview', page:0, rows:[], dnsRows:[], procRows:[], expr:'', current:null, alertRule:'', fields:[], meta:{}, alertRows:[] };
+const PROC_FIELDS = [
+  {name:'ts',label:'时间',type:'time'}, {name:'host',label:'主机',type:'text'},
+  {name:'image',label:'进程',type:'text'}, {name:'pid',label:'PID',type:'text'},
+  {name:'user',label:'用户',type:'text'}, {name:'guid',label:'进程GUID',type:'text'},
+  {name:'cmdline',label:'命令行',type:'text'}, {name:'parent',label:'父进程',type:'text'},
+  {name:'parent_guid',label:'父进程GUID',type:'text'}, {name:'parent_pid',label:'父PID',type:'text'},
+  {name:'parent_cmdline',label:'父命令行',type:'text'}, {name:'integrity',label:'完整性',type:'text'},
+  {name:'hashes',label:'哈希',type:'text'}, {name:'rule_name',label:'规则',type:'text'},
+  {name:'source',label:'来源',type:'text'}
+];
+const DNS_FIELDS = [
+  {name:'ts',label:'时间',type:'time'}, {name:'host',label:'主机',type:'text'},
+  {name:'pid',label:'PID',type:'text'}, {name:'image',label:'进程',type:'text'},
+  {name:'user',label:'用户',type:'text'}, {name:'guid',label:'进程GUID',type:'text'},
+  {name:'query',label:'查询域名',type:'text'}, {name:'results',label:'解析结果',type:'text'},
+  {name:'geo',label:'归属地',type:'text'}, {name:'country',label:'国家/地区',type:'text'},
+  {name:'status',label:'状态',type:'int'}, {name:'rule_name',label:'规则',type:'text'},
+  {name:'risk',label:'风险',type:'text'}
+];
+const FILTER_UI = {
+  conns:{expr:'#qexpr',field:'#fField',op:'#cOp',join:'#cJoin',value:'#cVal',add:'#cAdd',search:'#btnSearch',reset:'#btnReset',conds:'#activeConds',hot:'#hotValues',def:'dst_ip'},
+  procs:{expr:'#pExpr',field:'#pField',op:'#pOp',join:'#pJoin',value:'#pVal',add:'#pAdd',search:'#pSearch',reset:'#pReset',conds:'#pConds',hot:'#pHot',def:'image'},
+  dns:{expr:'#dExpr',field:'#dField',op:'#dOp',join:'#dJoin',value:'#dVal',add:'#dAdd',search:'#dSearch',reset:'#dReset',conds:'#dConds',hot:'#dHot',def:'query'}
+};
+const state = { tab:'overview', page:0, rows:[], dnsRows:[], procRows:[], exprs:{conns:'',procs:'',dns:''}, current:null, alertRule:'', fields:[], meta:{}, alertRows:[] };
 
 function applyTheme(t){
   if(t==='dark') document.documentElement.dataset.theme = 'dark';
@@ -332,6 +400,69 @@ async function api(path){
   const r = await fetch(path);
   if(!r.ok) throw new Error((await r.text()).trim() || ('HTTP '+r.status));
   return r.json();
+}
+
+function tabExpr(tab=state.tab){ return state.exprs[tab] || ''; }
+function fieldDefs(tab){
+  if(tab==='procs') return PROC_FIELDS;
+  if(tab==='dns') return DNS_FIELDS;
+  return (state.fields||[]).map(f=>({name:f.name,label:f.label||f.name,type:f.type||'text',raw:f.raw}));
+}
+function fieldMeta(tab,name){ return fieldDefs(tab).find(f=>f.name===name) || {name,label:name,type:'text'}; }
+function fillFields(tab){
+  const ui=FILTER_UI[tab],sel=$(ui.field),old=sel.value;
+  const defs=fieldDefs(tab);
+  sel.innerHTML='<option value="">选择字段…</option>'+defs.map(f=>`<option value="${esc(f.name)}">${esc(f.label)}</option>`).join('');
+  const want=old||ui.def;
+  sel.value=defs.some(f=>f.name===want)?want:(defs.some(f=>f.name===ui.def)?ui.def:(defs[0]?.name||''));
+  syncOperators(tab);
+}
+function syncOperators(tab){
+  const ui=FILTER_UI[tab],field=$(ui.field).value,typ=fieldMeta(tab,field).type,op=$(ui.op),old=op.value;
+  let opts;
+  if(typ==='bool') opts=[['=','等于']];
+  else if(typ==='int'||typ==='time') opts=[['=','等于'],['!=','不等于'],['>','大于'],['>=','大于等于'],['<','小于'],['<=','小于等于']];
+  else opts=[[':','包含'],['!:','不包含'],['=','等于'],['!=','不等于']];
+  op.innerHTML=opts.map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
+  op.value=opts.some(x=>x[0]===old)?old:opts[0][0];
+}
+function syncFilter(tab){
+  const ui=FILTER_UI[tab];
+  if(!ui) return;
+  $(ui.expr).value=tabExpr(tab);
+  fillFields(tab);
+  renderFilterConds(tab);
+}
+async function loadHot(tab=state.tab){
+  const ui=FILTER_UI[tab]; if(!ui) return;
+  const field=$(ui.field).value||ui.def;
+  try{
+    const d=await api(`/api/values?tab=${tab}&field=${encodeURIComponent(field)}&limit=10`);
+    $(ui.hot).innerHTML=(d.values||[]).map(v=>`<span class="chip" data-f="${esc(field)}" data-v="${esc(v.key)}">${esc(v.key)} <b>${v.n}</b></span>`).join('')||'<span class="dim">该字段暂无热门值</span>';
+  }catch(e){ $(ui.hot).innerHTML='<span class="dim">热门数据加载失败</span>'; }
+}
+function renderFilterConds(tab){
+  const ui=FILTER_UI[tab],toks=splitTokens(tabExpr(tab));
+  $(ui.conds).innerHTML=toks.map((t,i)=>{
+    let label=t,neg=false,cls='';
+    const low=t.toLowerCase();
+    if(t==='|'||low==='or'||t==='或'){label='or';cls=' op';}
+    else if(low==='and'||t==='且'){label='and';cls=' op';}
+    else if(t==='('||t===')'){label=t;cls=' op';}
+    else if(t.startsWith('-')&&t.length>1){neg=true;label='排除 '+t.slice(1).replace(/"/g,'');}
+    else label=t.replace(/"/g,'');
+    return `<span class="chip active${cls}" data-tok="${i}">${neg?'⊘ ':''}${esc(label)}${cls?'':' <b>×</b>'}</span>`;
+  }).join('');
+}
+function runFilterSearch(tab=state.tab){
+  const ui=FILTER_UI[tab]; if(!ui) return;
+  state.exprs[tab]=$(ui.expr).value.trim(); state.page=0; renderFilterConds(tab); refresh();
+}
+function addFilterCond(tab,field,op,val,join='and'){
+  if(!field){toast('先选择字段');return;} if(!val){toast('请输入值');return;}
+  const tok=field+op+quoteVal(val),cur=tabExpr(tab).trim(),expr=cur?cur+' '+join.toLowerCase()+' '+tok:tok;
+  state.exprs[tab]=expr; state.page=0; syncFilter(tab);
+  if(state.tab!==tab) showTab(tab); else { loadHot(tab); refresh(); }
 }
 
 /* ---------------- 概览 ---------------- */
@@ -369,28 +500,38 @@ async function loadOverview(){
 /* ---------------- 连接 ---------------- */
 async function loadConns(){
   renderConds();
-  const p = new URLSearchParams({expr: state.expr||'', limit: PAGE, offset: state.page*PAGE});
+  const p = new URLSearchParams({expr: tabExpr('conns'), limit: PAGE, offset: state.page*PAGE});
   if(state.sort) p.set('sort', state.sort);
   const d = await api('/api/conns?'+p.toString());
   state.rows = d.rows;
   $('#connRows').innerHTML = d.rows.map((c,i)=>{
     const risk = (c.risk||[]).map(r=>`<span class="tag risk" title="${RULE[r]||r}">${r}</span>`).join('');
     return `<tr data-i="${i}">
-      <td class="mono nowrap">${fmtT(c.ts)}</td>
+      <td class="mono dim">${state.page*PAGE+i+1}</td>
+      <td class="mono nowrap" data-f="ts" data-v="${esc(c.ts)}">${fmtT(c.ts)}</td>
+      <td class="ell" data-f="host" data-v="${esc(c.host)}">${esc(c.host)}</td>
+      <td class="mono" data-f="pid" data-v="${esc(c.pid)}">${esc(c.pid)}</td>
+      <td class="mono dim ell" data-f="guid" data-v="${esc(c.guid)}" style="max-width:150px" title="${esc(c.guid)}">${esc(c.guid)}</td>
       <td class="ell" data-f="image" data-v="${esc(c.image)}" title="${esc(c.image)}">${esc(baseName(c.image)||'System')}</td>
       <td class="dim ell" data-f="user" data-v="${esc(c.user)}" style="max-width:120px">${esc(c.user)}</td>
+      <td class="mono dim ell" data-f="cmdline" data-v="${esc(c.cmdLine)}" style="max-width:240px" title="${esc(c.cmdLine)}">${esc(c.cmdLine)}</td>
+      <td class="dim ell" data-f="parent" data-v="${esc(c.parent)}" style="max-width:180px" title="${esc(c.parent)}">${esc(c.parent)}</td>
+      <td class="mono dim ell" data-f="hashes" data-v="${esc(c.hashes)}" style="max-width:180px" title="${esc(c.hashes)}">${esc(c.hashes)}</td>
       <td class="mono" data-f="proto" data-v="${esc(c.proto)}">${esc(c.proto)}</td>
-      <td><span class="arrow ${c.out?'o':'i'}">${c.out?'→ 出':'← 入'}</span></td>
+      <td data-f="outbound" data-v="${c.out?'出站':'入站'}"><span class="arrow ${c.out?'o':'i'}">${c.out?'→ 出':'← 入'}</span></td>
       <td class="mono dim nowrap" data-f="src_ip" data-v="${esc(c.srcIp)}">${esc(c.srcIp)}</td>
       <td class="mono dim" data-f="src_port" data-v="${esc(c.srcPort)}">${esc(c.srcPort)}</td>
       <td class="mono nowrap" data-f="dst_ip" data-v="${esc(c.dstIp)}">${esc(c.dstIp)}</td>
       <td class="mono" data-f="dst_port" data-v="${esc(c.dstPort)}">${esc(c.dstPort)}</td>
       <td class="ell dim" data-f="dst_host" data-v="${esc(c.dstHost)}" title="${esc(c.dstHost)}">${esc(c.dstHost)}</td>
       <td class="dim ell" data-f="geo" data-v="${esc(c.geo)}" style="max-width:170px" title="${esc(c.geo)}">${esc(c.geo)}</td>
-      <td>${risk||'<span class="dim">-</span>'}</td>
+      <td data-f="integrity" data-v="${esc(c.integ)}">${esc(c.integ)}</td>
+      <td class="dim ell" data-f="rule_name" data-v="${esc(c.rule)}">${esc(c.rule)}</td>
+      <td data-f="risk" data-v="${esc((c.risk||[]).join(' '))}">${risk||'<span class="dim">-</span>'}</td>
+      <td class="dim ell" data-f="source" data-v="${esc(c.source)}">${esc(c.source)}</td>
       <td><button class="btn mini" data-detail="${i}">详情</button></td>
     </tr>`;
-  }).join('') || `<tr><td colspan="13"><div class="empty">没有匹配的连接</div></td></tr>`;
+  }).join('') || `<tr><td colspan="23"><div class="empty">没有匹配的连接</div></td></tr>`;
   const pages = Math.max(1, Math.ceil(d.total/PAGE));
   $('#connTotal').textContent = `共 ${d.total.toLocaleString()} 条 · 第 ${Math.min(state.page+1,pages)}/${pages} 页`;
   $('#prev').disabled = state.page<=0;
@@ -399,19 +540,26 @@ async function loadConns(){
 
 /* ---------------- 进程 ---------------- */
 async function loadProcs(){
-  const d = await api('/api/procs?expr='+encodeURIComponent(state.expr||''));
+  const d = await api('/api/procs?expr='+encodeURIComponent(tabExpr('procs')));
   state.procRows = d.rows;
   $('#procRows').innerHTML = d.rows.map((p,i)=>`<tr data-guid="${esc(p.guid)}">
-      <td><div class="ell" style="max-width:420px" title="${esc(p.cmdLine)}">${esc(baseName(p.image)||'System')}</div></td>
-      <td class="dim ell" style="max-width:130px">${esc(p.user)}</td>
+      <td class="mono dim">${i+1}</td>
+      <td data-f="image" data-v="${esc(p.image)}"><div class="ell" style="max-width:340px" title="${esc(p.cmdLine)}">${esc(baseName(p.image)||'System')}</div></td>
+      <td class="mono" data-f="pid" data-v="${esc(p.pid)}">${esc(p.pid)}</td>
+      <td class="dim ell" data-f="user" data-v="${esc(p.user)}" style="max-width:130px">${esc(p.user)}</td>
+      <td class="mono dim ell" data-f="guid" data-v="${esc(p.guid)}" style="max-width:150px">${esc(p.guid)}</td>
+      <td class="mono dim ell" data-f="cmdline" data-v="${esc(p.cmdLine)}" style="max-width:360px" title="${esc(p.cmdLine)}">${esc(p.cmdLine)}</td>
+      <td class="dim ell" data-f="parent" data-v="${esc(p.parent)}" style="max-width:220px" title="${esc(p.parent)}">${esc(p.parent)}</td>
+      <td class="mono dim ell" data-f="hashes" data-v="${esc(p.hashes)}" style="max-width:180px" title="${esc(p.hashes)}">${esc(p.hashes)}</td>
       <td class="mono">${p.n.toLocaleString()}</td>
       <td class="mono ${p.pub>0?'':'dim'}">${p.pub}</td>
       <td class="mono dim">${p.ips}</td>
-      <td class="mono dim nowrap">${fmtT(p.first)}</td>
-      <td class="mono dim nowrap">${fmtT(p.last)}</td>
+      <td class="mono dim nowrap">${fmtT(p.start)}</td>
+      <td class="mono dim nowrap">${fmtT(p.end)}</td>
       <td>${p.risky? `<span class="tag risk">${p.risky}</span>`:'<span class="dim">-</span>'}</td>
+      <td class="dim ell" data-f="source" data-v="${esc(p.source)}">${esc(p.source)}</td>
       <td><button class="btn mini" data-procbtn="${i}">详情</button></td>
-    </tr>`).join('') || `<tr><td colspan="9"><div class="empty">没有匹配的进程</div></td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="16"><div class="empty">没有匹配的进程</div></td></tr>`;
 }
 
 /* ---------------- DNS ---------------- */
@@ -433,16 +581,25 @@ function fmtDNSStatus(v){
   return s;
 }
 async function loadDNS(){
-  const d = await api('/api/dns?q='+encodeURIComponent(state.expr||'')+'&limit=500');
+  const d = await api('/api/dns?q='+encodeURIComponent(tabExpr('dns'))+'&limit=500');
   state.dnsRows = d.rows;
   $('#dnsRows').innerHTML = d.rows.map((x,i)=>`<tr>
-      <td class="mono nowrap dim">${fmtT(x.ts)}</td>
-      <td class="ell" style="max-width:220px">${esc(baseName(x.image)||'-')}</td>
-      <td class="mono">${esc(x.query)}</td>
-      <td class="mono dim ell" style="max-width:340px" title="${esc(fmtDNSRes(x.results))}">${esc(fmtDNSRes(x.results))}</td>
-      <td class="${String(x.status).trim()==='0'?'dim':'bad'}">${esc(fmtDNSStatus(x.status))}</td>
+      <td class="mono dim">${i+1}</td>
+      <td class="mono nowrap dim" data-f="ts" data-v="${esc(x.ts)}">${fmtT(x.ts)}</td>
+      <td class="ell" data-f="host" data-v="${esc(x.host)}">${esc(x.host)}</td>
+      <td class="mono" data-f="pid" data-v="${esc(x.pid)}">${esc(x.pid)}</td>
+      <td class="ell" data-f="image" data-v="${esc(x.image)}" style="max-width:220px">${esc(baseName(x.image)||'-')}</td>
+      <td class="dim ell" data-f="user" data-v="${esc(x.user)}" style="max-width:140px">${esc(x.user)}</td>
+      <td class="mono dim ell" data-f="guid" data-v="${esc(x.guid)}" style="max-width:150px">${esc(x.guid)}</td>
+      <td class="mono" data-f="query" data-v="${esc(x.query)}">${esc(x.query)}</td>
+      <td class="mono dim ell" data-f="results" data-v="${esc(x.results)}" style="max-width:340px" title="${esc(fmtDNSRes(x.results))}">${esc(fmtDNSRes(x.results))}</td>
+      <td class="dim ell" data-f="geo" data-v="${esc(x.geo)}" style="max-width:180px">${esc(x.geo)}</td>
+      <td class="dim" data-f="country" data-v="${esc(x.country)}">${esc(x.country)}</td>
+      <td class="${String(x.status).trim()==='0'?'dim':'bad'}" data-f="status" data-v="${esc(x.status)}">${esc(fmtDNSStatus(x.status))}</td>
+      <td class="dim ell" data-f="rule_name" data-v="${esc(x.ruleName)}">${esc(x.ruleName)}</td>
+      <td data-f="risk" data-v="${esc((x.risk||[]).join(' '))}">${(x.risk||[]).map(r=>`<span class="tag risk" title="${esc(RULE[r]||r)}">${esc(r)}</span>`).join(' ')||'<span class="dim">-</span>'}</td>
       <td><button class="btn mini" data-dns="${i}">详情</button></td>
-    </tr>`).join('') || `<tr><td colspan="6"><div class="empty">没有 DNS 记录（需要 Sysmon 开启 EID 22）</div></td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="15"><div class="empty">没有 DNS 记录（需要 Sysmon 开启 EID 22）</div></td></tr>`;
 }
 
 /* ---------------- 告警 ---------------- */
@@ -543,9 +700,14 @@ function openDNSDrawer(x){
 
 /* ---------------- 标签页 ---------------- */
 function showTab(name){
+  if(FILTER_UI[state.tab]){
+    const prev=FILTER_UI[state.tab];
+    state.exprs[state.tab]=$(prev.expr).value.trim();
+  }
   state.tab = name;
   document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on', x.dataset.tab===name));
   document.querySelectorAll('section').forEach(s=>s.classList.toggle('on', s.id==='tab-'+name));
+  if(FILTER_UI[name]){ syncFilter(name); loadHot(name); }
   history.replaceState(null,'','#'+name);
   refresh();
 }
@@ -717,88 +879,64 @@ function splitTokens(s){
 }
 function quoteVal(v){ return /\s/.test(v) ? '"'+String(v).replace(/"/g,'')+'"' : v; }
 
-function runSearch(expr, jump){
-  state.expr = (expr||'').trim();
+function runSearch(expr, jump, target){
+  target = target || (FILTER_UI[state.tab] ? state.tab : 'conns');
+  state.exprs[target] = (expr||'').trim();
   state.page = 0;
-  $('#qexpr').value = state.expr;
-  renderConds();
-  if(jump) showTab('conns'); else refresh();
+  syncFilter(target);
+  if(jump && state.tab!==target) showTab(target); else refresh();
 }
-
-// 条件标签：显示当前查询拆出来的每一项，点 × 删除。
-function renderConds(){
-  const toks = splitTokens(state.expr||'');
-  $('#activeConds').innerHTML = toks.map((t,i)=>{
-    let label = t, neg = false, cls = '';
-    const low = t.toLowerCase();
-    if(t==='|' || low==='or' || t==='或'){ label='or'; cls=' op'; }
-    else if(low==='and' || t==='且'){ label='and'; cls=' op'; }
-    else if(t==='('||t===')'){ label=t; cls=' op'; }
-    else if(t.startsWith('-') && t.length>1){ neg=true; label='排除 '+t.slice(1).replace(/"/g,''); }
-    else label = t.replace(/"/g,'');
-    return `<span class="chip active${cls}" data-tok="${i}">${neg?'⊘ ':''}${esc(label)}${cls?'':' <b>×</b>'}</span>`;
-  }).join('');
+function renderConds(tab='conns'){ renderFilterConds(tab); }
+for(const tab of Object.keys(FILTER_UI)){
+  const ui=FILTER_UI[tab];
+  $(ui.field).onchange=()=>{ syncOperators(tab); loadHot(tab); };
+  $(ui.add).onclick=()=>{ addFilterCond(tab,$(ui.field).value,$(ui.op).value,$(ui.value).value.trim(),$(ui.join).value); $(ui.value).value=''; };
+  $(ui.value).addEventListener('keydown',e=>{ if(e.key==='Enter'){e.preventDefault();$(ui.add).click();} });
+  $(ui.search).onclick=()=>runFilterSearch(tab);
+  $(ui.expr).addEventListener('keydown',e=>{ if(e.key==='Enter'){e.preventDefault();runFilterSearch(tab);} });
+  $(ui.reset).onclick=()=>{
+    state.exprs[tab]=''; state.page=0; $(ui.field).value=ui.def; $(ui.join).value='and'; $(ui.value).value='';
+    syncFilter(tab); loadHot(tab); refresh();
+  };
+  $(ui.conds).addEventListener('click',e=>{
+    const c=e.target.closest('.chip[data-tok]'); if(!c) return;
+    const toks=splitTokens(tabExpr(tab)); toks.splice(+c.dataset.tok,1);
+    state.exprs[tab]=toks.join(' '); syncFilter(tab); refresh();
+  });
+  $(ui.hot).addEventListener('click',e=>{
+    const c=e.target.closest('.chip'); if(!c) return;
+    showCondMenu(e,c.dataset.f,c.dataset.v,tab);
+  });
 }
-$('#activeConds').addEventListener('click', e=>{
-  const c = e.target.closest('.chip[data-tok]'); if(!c) return;
-  const toks = splitTokens(state.expr||'');
-  toks.splice(+c.dataset.tok, 1);
-  runSearch(toks.join(' '), true);
-});
-
-// 点选添加条件，不必写表达式
-function addCond(field, op, val, join){
-  if(!field){ toast('先在上面选择字段'); return; }
-  if(!val){ toast('请输入值'); return; }
-  const tok = field + op + quoteVal(val);
-  const cur = (state.expr||'').trim();
-  const j = join || 'and';
-  runSearch(cur ? cur + ' ' + j + ' ' + tok : tok, true);
+function addCond(field, op, val, join, target){
+  target=target||(FILTER_UI[state.tab]?state.tab:'conns');
+  addFilterCond(target,field,op,val,join);
 }
-$('#cAdd').onclick = ()=>{ addCond($('#fField').value, $('#cOp').value, $('#cVal').value.trim(), $('#cJoin').value); $('#cVal').value=''; };
-$('#cVal').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#cAdd').click(); } });
-$('#btnSearch').onclick = ()=> runSearch($('#qexpr').value, true);
-$('#qexpr').addEventListener('keydown', e=>{ if(e.key==='Enter') runSearch($('#qexpr').value, true); });
-$('#btnReset').onclick = ()=>{
-  runSearch('', true);
-  $('#fField').value = '';
-  $('#cOp').value = ':';
-  $('#cJoin').value = 'and';
-  $('#cVal').value = '';
-  $('#hotValues').innerHTML = '';
-};
+$('#btnSyntax').onclick=()=>showSyntax('conns');
+$('#pSyntax').onclick=()=>showSyntax('procs');
+$('#dSyntax').onclick=()=>showSyntax('dns');
 document.addEventListener('keydown', e=>{
   if(e.key==='/' && !['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)){ e.preventDefault(); showTab('conns'); $('#qexpr').focus(); }
-  if(e.key==='Escape'){ $('#drawer').classList.remove('on'); $('#cellMenu').classList.remove('on'); openImport(false); }
-});
-
-$('#fField').onchange = ()=> loadValues($('#fField').value);
-async function loadValues(field){
-  if(!field){ $('#hotValues').innerHTML=''; return; }
-  try{
-    const d = await api('/api/values?field='+encodeURIComponent(field)+'&limit=16');
-    $('#hotValues').innerHTML = d.values.map(v=>`<span class="chip" data-f="${esc(field)}" data-v="${esc(v.key)}">${esc(v.key)} <b>${v.n}</b></span>`).join('') || '<span class="dim">该字段无可选值</span>';
-  }catch(e){ $('#hotValues').innerHTML='<span class="dim">'+esc(e.message)+'</span>'; }
-}
-$('#hotValues').addEventListener('click', e=>{
-  const c = e.target.closest('.chip'); if(!c) return;
-  showCondMenu(e, c.dataset.f, c.dataset.v);
+  if(e.key==='Escape'){ $('#drawer').classList.remove('on'); $('#cellMenu').classList.remove('on'); $('#syntaxModal').classList.remove('on'); openImport(false); }
 });
 
 /* ---------------- 表格交互 ---------------- */
 $('#prev').onclick = ()=>{ if(state.page>0){ state.page--; loadConns(); } };
 $('#next').onclick = ()=>{ state.page++; loadConns(); };
-$('#btnExport').onclick = ()=>{ window.location = '/api/export?expr='+encodeURIComponent(state.expr||''); };
+$('#btnExport').onclick = ()=>{ window.location = '/api/export?tab=conns&expr='+encodeURIComponent(tabExpr('conns')); };
+$('#pExport').onclick = ()=>{ window.location = '/api/export?tab=procs&expr='+encodeURIComponent(tabExpr('procs')); };
+$('#dExport').onclick = ()=>{ window.location = '/api/export?tab=dns&expr='+encodeURIComponent(tabExpr('dns')); };
 $('#dClose').onclick = ()=> $('#drawer').classList.remove('on');
 
 // 点单元格 / 热门值都弹 and-or 菜单（or 在上）；详情走行末按钮，不再冲突。
 let cellCtx = null;
-function showCondMenu(e, f, v){
+function showCondMenu(e, f, v, tab=state.tab){
   if(!f) return;
   if(!v){ toast('该字段为空，不能作为筛选值'); return; }
-  const op = (/port$|^pid$|^ts$/.test(f)) ? '=' : ':';
-  cellCtx = {f, v, op};
-  $('#cellMenuTitle').textContent = f + (op === '=' ? ' = ' : ' 包含 ') + v;
+  const typ=fieldMeta(tab,f).type;
+  const op = (typ==='int'||typ==='time'||typ==='bool'||/port$|^pid$/.test(f)) ? '=' : ':';
+  cellCtx = {f, v, op, tab};
+  $('#cellMenuTitle').textContent = fieldMeta(tab,f).label + (op === '=' ? ' = ' : ' 包含 ') + v;
   const m = $('#cellMenu');
   m.style.left = Math.min(e.clientX, window.innerWidth - 230) + 'px';
   m.style.top = Math.min(e.clientY, window.innerHeight - 130) + 'px';
@@ -811,20 +949,26 @@ $('#connRows').addEventListener('click', e=>{
   if(td) showCondMenu(e, td.dataset.f, td.dataset.v || '');
 });
 document.addEventListener('click', e=>{
-  if(e.target.closest('#cellMenu') || e.target.closest('td[data-f]') || e.target.closest('#hotValues')) return;
+  if(e.target.closest('#cellMenu') || e.target.closest('td[data-f]') || e.target.closest('#hotValues,#pHot,#dHot')) return;
   $('#cellMenu').classList.remove('on');
 });
 $('#cellMenu').addEventListener('click', e=>{
   const b = e.target.closest('button[data-join]'); if(!b || !cellCtx) return;
-  addCond(cellCtx.f, cellCtx.op || ':', cellCtx.v, b.dataset.join);
+  addCond(cellCtx.f, cellCtx.op || ':', cellCtx.v, b.dataset.join, cellCtx.tab);
   $('#cellMenu').classList.remove('on');
   cellCtx = null;
 });
 $('#procRows').addEventListener('click', e=>{
   const b = e.target.closest('[data-procbtn]');
   if(b){ openProcDrawer(state.procRows[+b.dataset.procbtn]); return; }
+  const td=e.target.closest('td[data-f]');
+  if(td){ showCondMenu(e,td.dataset.f,td.dataset.v||'','procs'); return; }
   const tr = e.target.closest('tr[data-guid]'); if(!tr) return;
-  runSearch('guid:"'+tr.dataset.guid+'"', true);
+  runSearch('guid:"'+tr.dataset.guid+'"', true, 'conns');
+});
+$('#procRows').addEventListener('contextmenu', e=>{
+  const td=e.target.closest('td[data-f]'); if(!td) return;
+  e.preventDefault(); showCondMenu(e,td.dataset.f,td.dataset.v||'','procs');
 });
 $('#alertRows').addEventListener('click', e=>{
   const b = e.target.closest('[data-alertbtn]');
@@ -835,13 +979,19 @@ $('#alertRows').addEventListener('click', e=>{
 $('#dnsRows').addEventListener('click', e=>{
   const b = e.target.closest('[data-dns]');
   if(b){ openDNSDrawer(state.dnsRows[+b.dataset.dns]); return; }
+  const td=e.target.closest('td[data-f]');
+  if(td){ showCondMenu(e,td.dataset.f,td.dataset.v||'','dns'); }
+});
+$('#dnsRows').addEventListener('contextmenu', e=>{
+  const td=e.target.closest('td[data-f]'); if(!td) return;
+  e.preventDefault(); showCondMenu(e,td.dataset.f,td.dataset.v||'','dns');
 });
 $('#ruleCards').addEventListener('click', e=>{
   const c = e.target.closest('.rulecard'); if(!c) return;
   state.alertRule = c.dataset.rule; loadAlerts();
 });
-$('#dProc').onclick = ()=>{ if(!state.current) return; const g=state.current.guid; $('#drawer').classList.remove('on'); runSearch('guid:"'+g+'"', true); };
-$('#dIp').onclick = ()=>{ if(!state.current || !state.current.dstIp) return; const ip=state.current.dstIp; $('#drawer').classList.remove('on'); runSearch('dst_ip:"'+ip+'"', true); };
+$('#dProc').onclick = ()=>{ if(!state.current) return; const g=state.current.guid; $('#drawer').classList.remove('on'); runSearch('guid:"'+g+'"', true, 'conns'); };
+$('#dIp').onclick = ()=>{ if(!state.current || !state.current.dstIp) return; const ip=state.current.dstIp; $('#drawer').classList.remove('on'); runSearch('dst_ip:"'+ip+'"', true, 'conns'); };
 $('#dCopy').onclick = ()=>{ if(!state.current) return; navigator.clipboard?.writeText(state.current.cmdLine||''); toast('已复制命令行'); };
 
 /* ---------------- 导入 & 初始化 ---------------- */
@@ -877,7 +1027,32 @@ function openImport(show){
   if(show) $('#importModal').dataset.drag = '0';
 }
 $('#btnImport').onclick = ()=> openImport(true);
+$('#btnExit').onclick = async ()=>{
+  if(!confirm('退出 N-trace？Web 服务和实时采集都会停止。')) return;
+  try { await fetch('/api/exit',{method:'POST'}); } catch(e) {}
+  document.body.innerHTML = '<div style="padding:40px;font:16px Microsoft YaHei,sans-serif">N-trace 已退出，可以关闭页面。</div>';
+};
 $('#importClose').onclick = ()=> openImport(false);
+$('#syntaxClose').onclick = ()=> $('#syntaxModal').classList.remove('on');
+function showSyntax(tab){
+  const titles={conns:'连接语法',procs:'进程语法',dns:'DNS 语法'};
+  const examples={
+    conns:['dst_ip:203.0.113.10','dst_port=443','image:*chrome.exe and dst_host:*.example.com'],
+    procs:['image:*powershell*','cmdline:*encodedcommand*','parent:*services.exe and hashes:SHA256'],
+    dns:['query:*.github.com','results:203.0.113.10','risk:D1 and status!=0']
+  };
+  const defs=fieldDefs(tab);
+  $('#syntaxTitle').textContent=titles[tab]||'检索语法';
+  $('#syntaxBody').innerHTML=`
+    <div class="dim" style="line-height:1.9;margin-bottom:10px">
+      <code>:</code> 包含 · <code>!:</code> 不包含 · <code>=</code> 等于 · <code>!=</code> 不等于 ·
+      <code>and</code> 并且 · <code>or</code> 或者 · <code>-</code> 排除 · <code>()</code> 分组
+    </div>
+    <div style="margin-bottom:10px">${examples[tab].map(x=>`<span class="chip" style="cursor:default">${esc(x)}</span>`).join(' ')}</div>
+    <table><thead><tr><th>字段</th><th>名称</th><th>类型</th></tr></thead>
+    <tbody>${defs.map(f=>`<tr><td class="mono">${esc(f.name)}</td><td>${esc(f.label)}</td><td>${esc(f.type||'text')}</td></tr>`).join('')}</tbody></table>`;
+  $('#syntaxModal').classList.add('on');
+}
 $('#importModal').addEventListener('click', e => { if(e.target.id === 'importModal') openImport(false); });
 $('#dropArea').onclick = ()=> $('#filePicker').click();
 $('#filePicker').onchange = e => { const files=[...e.target.files]; e.target.value=''; if(files.length){ openImport(false); uploadFiles(files); } };
@@ -908,12 +1083,7 @@ async function loadMeta(){
   const paths = (m.sources||[]).filter(x=>x.path).map(x=>x.path);
   $('#ds').title = [files, ...paths].join('\n');
 
-  const sel = $('#fField');
-  const hot = state.fields.filter(f=>!f.raw);
-  const raw = state.fields.filter(f=>f.raw);
-  sel.innerHTML = '<option value="">选择字段…</option>'
-    + '<optgroup label="常用字段">' + hot.map(f=>`<option value="${esc(f.name)}">${esc(f.label)} (${esc(f.name)})</option>`).join('') + '</optgroup>'
-    + (raw.length? '<optgroup label="事件原始字段">' + raw.map(f=>`<option value="${esc(f.name)}">${esc(f.name)}</option>`).join('') + '</optgroup>' : '');
+  for(const tab of Object.keys(FILTER_UI)) fillFields(tab);
 }
 
 let liveTotal = 0;
@@ -944,7 +1114,7 @@ setInterval(pollLive, 2000);
 loadMeta().then(()=>{
   if((state.meta.conns||0) === 0) toast('还没有数据，点击右上角「导入 evtx」');
   const pre = new URLSearchParams(location.search).get('expr');
-  if(pre){ state.expr = pre; $('#qexpr').value = pre; }
+  if(pre){ state.exprs.conns = pre; syncFilter('conns'); }
   pollLive();
   const h = location.hash.slice(1);
   if(['overview','conns','procs','dns','alerts','system'].includes(h)) showTab(h);

@@ -1,0 +1,7 @@
+<Sysmon schemaversion="4.50">
+  <EventFiltering>
+    <ProcessCreate onmatch="exclude"/>
+    <NetworkConnect onmatch="exclude"/>
+    <DnsQuery onmatch="exclude"/>
+  </EventFiltering>
+</Sysmon>

@@ -1,5 +1,6 @@
 # 构建产物
 outputs/
+.tmp/
 
 # build.sh 从 sysmon/ 和 data/ 复制生成的嵌入资源
 audit/data/
@@ -9,6 +10,8 @@ trace-audit-data/
 *.db
 *.db-wal
 *.db-shm
+test/
+*.evtx
 
 # 系统与编辑器
 .DS_Store

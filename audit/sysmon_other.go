@@ -6,8 +6,9 @@ import "fmt"
 
 // SysmonStatus 供界面展示 Sysmon 安装状态与日志信息。
 type SysmonStatus struct {
-	Supported bool   `json:"supported"`
-	Error     string `json:"error,omitempty"`
+	Supported      bool   `json:"supported"`
+	ServiceRunning bool   `json:"serviceRunning"`
+	Error          string `json:"error,omitempty"`
 }
 
 func channelExists(channel string) bool { return false }
