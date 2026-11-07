@@ -25,12 +25,12 @@ var tableColumns = []tableColumn{
 	{"序号", 48, ""},
 	{"时间", 150, "ts"},
 	{"主机", 90, "host"},
+	{"用户", 85, "user"},
 	{"PID", 58, "pid"},
 	{"进程GUID", 110, "guid"},
 	{"进程", 155, "image"},
-	{"用户", 85, "user"},
-	{"命令行", 180, "cmdline"},
 	{"父进程", 130, "parent"},
+	{"命令行", 180, "cmdline"},
 	{"哈希", 110, "hashes"},
 	{"协议", 50, "proto"},
 	{"源 IP", 95, "src_ip"},
@@ -40,6 +40,7 @@ var tableColumns = []tableColumn{
 	{"域名", 140, "dst_host"},
 	{"方向", 46, "outbound"},
 	{"Geo", 85, "geo"},
+	{"内外网", 55, "public"},
 	{"完整性", 55, "integrity"},
 	{"规则", 65, "rule_name"},
 	{"风险", 50, "risk"},
@@ -54,6 +55,11 @@ type connTable struct {
 	lastDetail time.Time
 }
 
+// connHiddenFields 默认隐藏的列：主机、哈希、规则。Geo 列不隐藏，标题显示为“归属地”。
+var connHiddenFields = map[string]bool{
+	"host": true, "hashes": true, "rule_name": true,
+}
+
 func newConnTable(app *nativeApp, parent ui.Parent) *connTable {
 	opts := ui.OptsListView().
 		CtrlId(30001).
@@ -63,7 +69,14 @@ func newConnTable(app *nativeApp, parent ui.Parent) *connTable {
 		CtrlStyle(co.LVS_REPORT | co.LVS_OWNERDATA | co.LVS_SHOWSELALWAYS | co.LVS_SINGLESEL).
 		CtrlExStyle(co.LVS_EX_FULLROWSELECT | co.LVS_EX_DOUBLEBUFFER | co.LVS_EX_INFOTIP)
 	for _, c := range tableColumns {
-		opts.Column(c.title, ui.DpiX(c.width))
+		title, w := c.title, ui.DpiX(c.width)
+		if c.field == "geo" {
+			title = "归属地" // Geo 列用中文标题
+		}
+		if connHiddenFields[c.field] {
+			w = 0 // 默认隐藏
+		}
+		opts.Column(title, w)
 	}
 	t := &connTable{app: app, lv: ui.NewListView(parent, opts), db: app.cfg.db}
 	t.table = newSharedVirtualTable(
@@ -170,7 +183,7 @@ func (t *connTable) tip(c *Conn, sub, row int) string {
 		return ""
 	}
 	tip := t.cell(c, sub, row)
-	if sub == 20 {
+	if sub == 21 {
 		var parts []string
 		for _, r := range c.Risk {
 			if txt := ruleText[r]; txt != "" {
@@ -208,17 +221,17 @@ func (t *connTable) cell(c *Conn, col, row int) string {
 	case 2:
 		return c.Host
 	case 3:
-		return c.PID
-	case 4:
-		return c.Guid
-	case 5:
-		return c.Image
-	case 6:
 		return c.User
+	case 4:
+		return c.PID
+	case 5:
+		return c.Guid
+	case 6:
+		return c.Image
 	case 7:
-		return c.CmdLine
-	case 8:
 		return c.Parent
+	case 8:
+		return c.CmdLine
 	case 9:
 		return c.Hashes
 	case 10:
@@ -241,12 +254,17 @@ func (t *connTable) cell(c *Conn, col, row int) string {
 	case 17:
 		return c.Geo
 	case 18:
-		return c.Integ
+		if c.Public {
+			return "外网"
+		}
+		return "内网"
 	case 19:
-		return c.Rule
+		return c.Integ
 	case 20:
-		return strings.Join(c.Risk, " ")
+		return c.Rule
 	case 21:
+		return strings.Join(c.Risk, " ")
+	case 22:
 		return c.Source
 	}
 	return ""

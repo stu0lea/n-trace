@@ -8,10 +8,11 @@ import (
 	"time"
 )
 
+// 列序与连接表格一致（不含“序号”），隐藏列（主机/哈希/规则）仍导出，另含端口名。
 var exportHeader = []string{
-	"时间", "主机", "进程", "命令行", "用户", "PID", "进程GUID", "父进程", "协议", "方向",
-	"源IP", "源端口", "目的IP", "目的端口", "域名", "端口名", "归属地",
-	"公网", "风险规则", "进程哈希", "来源",
+	"时间", "主机", "用户", "PID", "进程GUID", "进程", "父进程", "命令行", "哈希", "协议",
+	"源IP", "源端口", "目标IP", "目标端口", "端口名", "域名", "方向", "归属地", "内外网",
+	"完整性", "规则", "风险", "来源",
 }
 
 func startCSV(w io.Writer, header []string) (*csv.Writer, error) {
@@ -50,13 +51,13 @@ func exportCSV(d *DB, w io.Writer, expr string, loc *time.Location, progress fun
 		}
 		pub := "内网"
 		if c.Public {
-			pub = "公网"
+			pub = "外网"
 		}
 		if err := cw.Write([]string{
 			time.UnixMilli(c.TS).In(loc).Format("2006-01-02 15:04:05.000"),
-			c.Host, c.Image, c.CmdLine, c.User, c.PID, c.Guid, c.Parent, c.Proto, dir,
-			c.SrcIP, c.SrcPort, c.DstIP, c.DstPort, c.DstHost, c.PortNm, c.Geo, pub,
-			strings.Join(c.Risk, " "), c.Hashes, c.Source,
+			c.Host, c.User, c.PID, c.Guid, c.Image, c.Parent, c.CmdLine, c.Hashes, c.Proto,
+			c.SrcIP, c.SrcPort, c.DstIP, c.DstPort, c.PortNm, c.DstHost, dir, c.Geo, pub,
+			c.Integ, c.Rule, strings.Join(c.Risk, " "), c.Source,
 		}); err != nil {
 			return n, err
 		}
@@ -78,19 +79,19 @@ func exportProcessCSV(d *DB, w io.Writer, expr string, loc *time.Location, progr
 		return 0, err
 	}
 	cw, err := startCSV(w, []string{
-		"主机", "进程", "PID", "用户", "进程GUID", "命令行", "父进程", "哈希",
-		"规则", "启动时间", "结束时间", "连接数", "公网连接数", "目的IP数",
-		"首次外联", "最近外联", "风险条数", "来源",
+		"主机", "进程", "父进程", "命令行", "PID", "进程GUID", "哈希", "规则", "用户",
+		"连接数", "公网连接数", "目的IP数", "首次外联", "最近外联", "启动时间", "结束时间",
+		"风险", "来源",
 	})
 	if err != nil {
 		return 0, err
 	}
 	for i, p := range rows {
 		if err := cw.Write([]string{
-			p.Host, p.Image, p.PID, p.User, p.Guid, p.CmdLine, p.Parent, p.Hashes,
-			p.Rule, processTimeText(p.Start, loc), processTimeText(p.End, loc),
+			p.Host, p.Image, p.Parent, p.CmdLine, p.PID, p.Guid, p.Hashes, p.Rule, p.User,
 			strconv.Itoa(p.N), strconv.Itoa(p.Pub), strconv.Itoa(p.IPs),
 			processTimeText(p.First, loc), processTimeText(p.Last, loc),
+			processTimeText(p.Start, loc), processTimeText(p.End, loc),
 			strconv.Itoa(p.Risky), p.Source,
 		}); err != nil {
 			return i, err
@@ -109,8 +110,8 @@ func exportDNSCSV(d *DB, w io.Writer, expr string, loc *time.Location, progress 
 		return 0, err
 	}
 	defer rows.Close()
-	cw, err := startCSV(w, []string{"时间", "主机", "进程", "PID", "进程GUID", "用户",
-		"查询域名", "解析结果", "归属地", "国家/地区", "风险", "状态", "规则"})
+	cw, err := startCSV(w, []string{"时间", "主机", "PID", "进程", "用户", "进程GUID",
+		"查询域名", "解析结果", "归属地", "国家/地区", "状态", "规则", "风险"})
 	if err != nil {
 		return 0, err
 	}
@@ -124,7 +125,7 @@ func exportDNSCSV(d *DB, w io.Writer, expr string, loc *time.Location, progress 
 		}
 		if err := cw.Write([]string{
 			time.UnixMilli(ts).In(loc).Format("2006-01-02 15:04:05.000"),
-			host, image, pid, guid, user, query, results, geo, country, risk, status, rule,
+			host, pid, image, user, guid, query, results, geo, country, status, rule, risk,
 		}); err != nil {
 			return n, err
 		}

@@ -45,7 +45,7 @@ var promoted = []FieldMeta{
 	{Name: "dst_host", Label: "域名", Type: "text"},
 	{Name: "port_name", Label: "端口名", Type: "text"},
 	{Name: "geo", Label: "归属地", Type: "text"},
-	{Name: "public", Label: "公网", Type: "bool"},
+	{Name: "public", Label: "内外网", Type: "bool"},
 	{Name: "ipv6", Label: "IPv6", Type: "bool"},
 	{Name: "rule_name", Label: "Sysmon规则", Type: "text"},
 	{Name: "risk", Label: "风险", Type: "text"},
@@ -1242,6 +1242,8 @@ func processField(name string) (string, string, error) {
 		return "rule_name", "text", nil
 	case "source", "来源":
 		return "source", "text", nil
+	case "n", "连接数", "连接":
+		return "n", "int", nil
 	case "event_id", "事件id":
 		return "event_id", "int", nil
 	}
@@ -1264,9 +1266,9 @@ func findOp(tok string) (string, int) {
 
 func normBool(v string) string {
 	switch strings.ToLower(v) {
-	case "1", "true", "yes", "y", "出站", "out", "外向":
+	case "1", "true", "yes", "y", "出站", "out", "外向", "外网", "公网", "是":
 		return "1"
-	case "0", "false", "no", "n", "入站", "in", "内向":
+	case "0", "false", "no", "n", "入站", "in", "内向", "内网", "否":
 		return "0"
 	}
 	return v
@@ -1731,6 +1733,33 @@ func (d *DB) ProcessValues(name string, limit int) ([]Count, error) {
 	}
 	q := "SELECT " + col + " k, count(*) n FROM process_event WHERE event_id=1 AND " +
 		col + " IS NOT NULL AND " + col + " != '' GROUP BY k ORDER BY n DESC LIMIT ?"
+	rows, err := d.sql.Query(q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Count{}
+	for rows.Next() {
+		var c Count
+		if rows.Scan(&c.Key, &c.N) == nil {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// ProcessValuesFiltered 按聚合视图统计进程字段 TOP 值；netOnly 时排除无网络连接的进程。
+func (d *DB) ProcessValuesFiltered(name string, limit int, netOnly bool) ([]Count, error) {
+	col, _, err := processField(name)
+	if err != nil {
+		return nil, err
+	}
+	extra := ""
+	if netOnly {
+		extra = " AND n>0"
+	}
+	q := "SELECT " + col + " k, count(*) n FROM process_list_view WHERE " +
+		col + " IS NOT NULL AND " + col + " != ''" + extra + " GROUP BY k ORDER BY n DESC LIMIT ?"
 	rows, err := d.sql.Query(q, limit)
 	if err != nil {
 		return nil, err

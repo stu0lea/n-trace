@@ -59,6 +59,7 @@ func (a *nativeApp) importPaths(paths []string) {
 			a.setStatus(msg)
 			appPrintf("%s", msg)
 			a.reloadTable()
+			a.refreshHotValuesOnData()
 		})
 	}()
 }
@@ -154,18 +155,18 @@ func (a *nativeApp) exportDone(err error, path string, n int, start time.Time, l
 func (a *nativeApp) showExportSuccess(msg, path string) {
 	modal := ui.NewModal(a.wnd, ui.OptsModal().
 		Title("导出 CSV").
-		Size(ui.Dpi(560, 238)).
+		Size(ui.Dpi(440, 238)).
 		Style(co.WS_CAPTION|co.WS_SYSMENU|co.WS_VISIBLE))
 
 	ui.NewStatic(modal, ui.OptsStatic().
 		Text("导出成功").
 		Position(ui.Dpi(20, 24)).
-		Size(ui.Dpi(520, 28)).
+		Size(ui.Dpi(400, 28)).
 		CtrlStyle(co.SS_CENTER|co.SS_CENTERIMAGE))
 	ui.NewEdit(modal, ui.OptsEdit().
 		Text(msg+"\r\n\r\n文件位置："+path).
 		Position(ui.Dpi(32, 60)).
-		Width(ui.DpiX(496)).
+		Width(ui.DpiX(376)).
 		Height(ui.DpiY(94)).
 		CtrlStyle(co.ES_MULTILINE|co.ES_READONLY).
 		WndStyle(co.WS_CHILD|co.WS_VISIBLE).
@@ -173,11 +174,11 @@ func (a *nativeApp) showExportSuccess(msg, path string) {
 
 	btnOpen := ui.NewButton(modal, ui.OptsButton().
 		Text("打开所在目录").
-		Position(ui.Dpi(160, 174)).
+		Position(ui.Dpi(100, 174)).
 		Width(ui.DpiX(120)))
 	btnClose := ui.NewButton(modal, ui.OptsButton().
 		Text("关闭").
-		Position(ui.Dpi(310, 174)).
+		Position(ui.Dpi(250, 174)).
 		Width(ui.DpiX(90)))
 	btnOpen.On().BnClicked(func() {
 		_ = exec.Command("explorer.exe", "/select,", path).Start()

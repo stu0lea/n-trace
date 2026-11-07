@@ -261,7 +261,7 @@ aside .foot{padding:10px 18px;border-top:1px solid var(--line);display:flex;gap:
     <div class="dim hint"><code>=</code> 等于 · <code>:</code> 包含 · <code>!: </code> 不包含 · <code>and</code> 并且 · <code>or</code> 或者 · 点单元格或热门值可加条件</div>
     <div class="card" style="padding:0;overflow:hidden">
       <table><thead><tr>
-        <th>序号</th><th>进程</th><th>PID</th><th>用户</th><th>进程GUID</th><th>命令行</th><th>父进程</th><th>哈希</th><th>连接数</th><th>公网</th><th>目的IP数</th><th>启动</th><th>结束</th><th>风险</th><th>来源</th><th></th>
+        <th>序号</th><th>进程</th><th>PID</th><th>用户</th><th>进程GUID</th><th>命令行</th><th>父进程</th><th>哈希</th><th>连接数</th><th>外网数</th><th>目的IP数</th><th>启动</th><th>结束</th><th>风险</th><th>来源</th><th></th>
       </tr></thead><tbody id="procRows"></tbody></table>
     </div>
   </section>
@@ -469,7 +469,7 @@ function addFilterCond(tab,field,op,val,join='and'){
 async function loadOverview(){
   const s = await api('/api/summary');
   $('#kpis').innerHTML = [
-    ['连接总数', s.conns], ['公网外联', s.public], ['进程数', s.processes],
+    ['连接总数', s.conns], ['外网外联', s.public], ['进程数', s.processes],
     ['目的 IP', s.dstIps], ['域名', s.domains]
   ].map(([k,v])=>`<div class="kpi"><b>${(v||0).toLocaleString()}</b><span>${k}</span></div>`).join('');
 
@@ -667,7 +667,7 @@ function openProcDrawer(p){
       <dt>进程 GUID</dt><dd class="mono" style="font-size:11px">${esc(p.guid)}</dd>
       <dt>哈希</dt><dd class="mono" style="font-size:11px">${esc(p.hashes)||'<span class=dim>-</span>'}</dd>
       <dt>连接数</dt><dd class="mono">${p.n.toLocaleString()}</dd>
-      <dt>公网连接</dt><dd class="mono">${p.pub.toLocaleString()}</dd>
+      <dt>外网连接</dt><dd class="mono">${p.pub.toLocaleString()}</dd>
       <dt>目的 IP 数</dt><dd class="mono">${p.ips.toLocaleString()}</dd>
       <dt>首次出现</dt><dd class="mono">${fmtFull(p.first)}</dd>
       <dt>最近出现</dt><dd class="mono">${fmtFull(p.last)}</dd>

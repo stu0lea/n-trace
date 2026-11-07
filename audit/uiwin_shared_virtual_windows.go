@@ -153,10 +153,11 @@ func (t *sharedVirtualTable[T]) reload(expr, sortField string, desc bool) {
 			t.dirty = false
 			t.mu.Unlock()
 			t.lv.Hwnd().SendMessage(co.LVM_SETITEMCOUNT, win.WPARAM(total), 0)
-			restoreListHOrigin(t.lv, hOrigin)
 			if total > 0 {
 				t.lv.Hwnd().SendMessage(co.LVM_ENSUREVISIBLE, 0, 1)
 			}
+			// 必须在 ENSUREVISIBLE 之后恢复横向滚动，否则会被其重置。
+			restoreListHOrigin(t.lv, hOrigin)
 			t.lv.SetRedraw(true)
 			t.lv.Hwnd().InvalidateRect(nil, false)
 			t.lv.Hwnd().UpdateWindow()
@@ -187,8 +188,9 @@ func (t *sharedVirtualTable[T]) refreshCount() {
 			if total != old {
 				withListRedraw(t.lv, func() {
 					t.lv.Hwnd().SendMessage(co.LVM_SETITEMCOUNT, win.WPARAM(total), 0)
-					restoreListHOrigin(t.lv, hOrigin)
 					restoreScrollRatio(t.lv, oldTop, oldTotal, total)
+					// 在 ENSUREVISIBLE（restoreScrollRatio 内部）之后恢复横向滚动。
+					restoreListHOrigin(t.lv, hOrigin)
 				})
 				t.app.setStatus("就绪")
 			}

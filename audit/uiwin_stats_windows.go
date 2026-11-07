@@ -19,7 +19,7 @@ func (a *nativeApp) openStatsPanel() {
 	}
 	switch a.tabs.active {
 	case 1:
-		a.openProcessStatsPanel(strings.TrimSpace(a.tabs.procExpr))
+		a.openProcessStatsPanel(a.procQueryExpr(a.tabs.procExpr))
 	case 2:
 		a.openDNSStatsPanel(strings.TrimSpace(a.tabs.dnsExpr))
 	default:
@@ -51,7 +51,7 @@ func (a *nativeApp) openConnStatsPanel(expr string) {
 		{"指标", 260}, {"值", 180},
 	})
 	proc := newStatsList(tab.Item(1).Child(), []tabCol{
-		{"进程", 500}, {"连接数", 110}, {"公网连接", 110}, {"风险连接", 110},
+		{"进程", 500}, {"连接数", 110}, {"外网连接", 110}, {"风险连接", 110},
 	})
 	ip := newStatsList(tab.Item(2).Child(), []tabCol{
 		{"目标 IP", 220}, {"归属地", 240}, {"连接数", 110}, {"涉及进程", 110}, {"风险连接", 110},
@@ -109,7 +109,7 @@ func (a *nativeApp) openConnStatsPanel(expr string) {
 	modal.On().WmCreate(func(_ ui.WmCreate) int {
 		tab.Item(0).Select()
 		overview.AddItem("连接总数", commaInt(stats.Conns))
-		overview.AddItem("公网连接", commaInt(stats.Public))
+		overview.AddItem("外网连接", commaInt(stats.Public))
 		overview.AddItem("出站连接", commaInt(stats.Outbound))
 		overview.AddItem("进程名数", commaInt(stats.Processes))
 		overview.AddItem("目的 IP 数", commaInt(stats.DstIPs))
@@ -202,7 +202,7 @@ func (a *nativeApp) openProcessStatsPanel(expr string) {
 		overview.AddItem("无网络连接", commaInt(stats.WithoutNetwork))
 		overview.AddItem("有结束事件", commaInt(stats.Ended))
 		overview.AddItem("连接总数", commaInt(stats.Connections))
-		overview.AddItem("公网连接", commaInt(stats.PublicConnections))
+		overview.AddItem("外网连接", commaInt(stats.PublicConnections))
 		overview.AddItem("风险连接", commaInt(stats.RiskyConnections))
 		overview.AddItem("涉及用户数", commaInt(stats.Users))
 		for _, r := range stats.TopProcess {

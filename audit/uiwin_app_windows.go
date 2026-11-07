@@ -61,6 +61,8 @@ type nativeApp struct {
 	btnReset     *ui.Button
 	btnHelp      *ui.Button
 	btnExport    *ui.Button
+	chkNetOnly   *ui.CheckBox
+	procNetOnly  bool
 	btnLive      *ui.Button
 	icoPlay      win.HICON
 	icoPause     win.HICON
@@ -74,6 +76,7 @@ type nativeApp struct {
 	refreshEvery time.Duration
 
 	hotGen         int
+	hotLast        time.Time
 	fixedCountGen  int
 	logTotals      LogTotals
 	logTotalsReady bool
@@ -157,6 +160,7 @@ func newNativeApp(cfg nativeConfig) *nativeApp {
 		cfg: cfg, loc: loc, fieldIdx: map[string]int{}, filterTab: 0,
 		refreshEvery: time.Duration(sec) * time.Second,
 		liveWake:     make(chan struct{}, 1),
+		procNetOnly:  true,
 	}
 	fields, err := cfg.db.Fields()
 	if err != nil || len(fields) == 0 {
@@ -247,6 +251,11 @@ func (a *nativeApp) build() {
 		Text("导出日志").
 		Position(ui.Dpi(818, 102)).
 		Width(ui.DpiX(92)))
+	a.chkNetOnly = ui.NewCheckBox(a.wnd, ui.OptsCheckBox().
+		Text("不显示无网络连接进程").
+		Position(ui.Dpi(640, 102)).
+		Size(ui.Dpi(170, 24)).
+		State(co.BST_CHECKED))
 
 	a.sbar = ui.NewStatusBar(a.wnd, ui.OptsStatusBar().
 		FixedPart(ui.DpiX(150), "日志总计 0 条").
@@ -327,6 +336,7 @@ func (a *nativeApp) bindEvents() {
 	a.btnHelp.On().BnClicked(func() { showSyntaxHelp(a) })
 	a.btnLive.On().BnClicked(func() { a.toggleLiveReading() })
 	a.btnExport.On().BnClicked(func() { a.exportDialog() })
+	a.chkNetOnly.On().BnClicked(func() { a.toggleProcNetOnly() })
 	a.btnApply.On().BnClicked(func() { a.applySyntax() })
 	a.edRefresh.OnSubclass().WmKeyDown(func(p ui.WmKey) {
 		if p.VirtualKeyCode() == co.VK_RETURN && !p.IsReleasingKey() {
@@ -445,6 +455,16 @@ func (a *nativeApp) layout() {
 	hWnd := a.wnd.Hwnd()
 	if hWnd == 0 {
 		return
+	}
+	// 任一下拉框展开时跳过整次布局：Win32 会把悬停中的选项提交为选中值
+	// （热词后台刷新触发重排的场景）。下拉关闭后的下一轮刷新会补上布局。
+	for _, cb := range []*ui.ComboBox{a.cbLogic, a.cbField, a.cbOp, a.cbBool} {
+		if cb == nil || cb.Hwnd() == 0 {
+			continue
+		}
+		if dropped, _ := cb.Hwnd().SendMessage(co.CB_GETDROPPEDSTATE, 0, 0); dropped != 0 {
+			return
+		}
 	}
 	rc, err := hWnd.GetClientRect()
 	if err != nil {
@@ -604,6 +624,9 @@ func (a *nativeApp) layout() {
 		setBounds(a.tabs.tab.Hwnd(), margin, tableY, w-margin*2, tableH)
 		a.tabs.resizeContent()
 	}
+	chkNetW := ui.DpiX(170)
+	setBounds(a.chkNetOnly.Hwnd(), w-margin-btnExportW-gap-chkNetW, tableY+ui.DpiY(1), chkNetW, ui.DpiY(24))
+	a.syncProcNetCheckbox()
 	setBounds(a.btnExport.Hwnd(), w-margin-btnExportW, tableY+ui.DpiY(1), btnExportW, ui.DpiY(24))
 	a.btnExport.Hwnd().SetWindowPos(win.HWND(0),
 		win.POINT{}, win.SIZE{},
@@ -690,38 +713,38 @@ func appendMenuItem(menu win.HMENU, pos int, id uint16, text string, submenu win
 func (a *nativeApp) showAbout() {
 	modal := ui.NewModal(a.wnd, ui.OptsModal().
 		Title("关于 N-trace").
-		Size(ui.Dpi(520, 300)).
+		Size(ui.Dpi(440, 238)).
 		Style(co.WS_CAPTION|co.WS_SYSMENU|co.WS_VISIBLE))
 
 	ui.NewStatic(modal, ui.OptsStatic().
 		Text("N-trace 联网安全审计").
-		Position(ui.Dpi(20, 28)).
-		Size(ui.Dpi(480, 22)).
+		Position(ui.Dpi(20, 24)).
+		Size(ui.Dpi(400, 22)).
 		CtrlStyle(co.SS_CENTER|co.SS_CENTERIMAGE))
 	ui.NewStatic(modal, ui.OptsStatic().
 		Text("洞察终端恶意非法外联").
-		Position(ui.Dpi(20, 56)).
-		Size(ui.Dpi(480, 22)).
+		Position(ui.Dpi(20, 50)).
+		Size(ui.Dpi(400, 22)).
 		CtrlStyle(co.SS_CENTER|co.SS_CENTERIMAGE))
 	ui.NewStatic(modal, ui.OptsStatic().
 		Text("版本：1.0").
-		Position(ui.Dpi(20, 84)).
-		Size(ui.Dpi(480, 22)).
+		Position(ui.Dpi(20, 76)).
+		Size(ui.Dpi(400, 22)).
 		CtrlStyle(co.SS_CENTER|co.SS_CENTERIMAGE))
 	ui.NewStatic(modal, ui.OptsStatic().
 		Text("作者：stu0lea").
-		Position(ui.Dpi(20, 112)).
-		Size(ui.Dpi(480, 22)).
+		Position(ui.Dpi(20, 102)).
+		Size(ui.Dpi(400, 22)).
 		CtrlStyle(co.SS_CENTER|co.SS_CENTERIMAGE))
 	ghLabel := ui.NewStatic(modal, ui.OptsStatic().
 		Text("GitHub：").
-		Position(ui.Dpi(100, 140)).
+		Position(ui.Dpi(60, 128)).
 		Size(ui.Dpi(60, 22)).
 		CtrlStyle(co.SS_LEFT|co.SS_CENTERIMAGE))
 	link := ui.NewStatic(modal, ui.OptsStatic().
 		Text("https://github.com/stu0lea/n-trace").
-		Position(ui.Dpi(160, 140)).
-		Size(ui.Dpi(300, 22)).
+		Position(ui.Dpi(120, 128)).
+		Size(ui.Dpi(260, 22)).
 		CtrlStyle(co.SS_LEFT|co.SS_CENTERIMAGE|co.SS_NOTIFY))
 	link.On().StnClicked(func() {
 		openBrowser("https://github.com/stu0lea/n-trace")
@@ -729,7 +752,7 @@ func (a *nativeApp) showAbout() {
 
 	btnClose := ui.NewButton(modal, ui.OptsButton().
 		Text("关闭").
-		Position(ui.Dpi(215, 202)).
+		Position(ui.Dpi(175, 174)).
 		Width(ui.DpiX(90)))
 	btnClose.On().BnClicked(func() {
 		modal.Hwnd().PostMessage(co.WM_CLOSE, 0, 0)
@@ -817,6 +840,17 @@ func setBounds(h win.HWND, x, y, w, hgt int) {
 	if h == 0 || w <= 0 || hgt <= 0 {
 		return
 	}
+	// 位置尺寸都没变时跳过 SetWindowPos：
+	// 重复移动控件会关闭展开中的下拉框（热词后台刷新场景）。
+	if rc, err := h.GetWindowRect(); err == nil {
+		if parent, perr := h.GetParent(); perr == nil {
+			_ = parent.ScreenToClientRc(&rc)
+			if int(rc.Left) == x && int(rc.Top) == y &&
+				int(rc.Right-rc.Left) == w && int(rc.Bottom-rc.Top) == hgt {
+				return
+			}
+		}
+	}
 	h.SetWindowPos(0,
 		win.POINT{X: int32(x), Y: int32(y)},
 		win.SIZE{Cx: int32(w), Cy: int32(hgt)},
@@ -875,6 +909,43 @@ func (a *nativeApp) applyRefreshInterval() {
 	a.setStatus(fmt.Sprintf("刷新间隔：%d 秒", n))
 }
 
+// procQueryExpr 将“不显示无网络连接进程”勾选条件注入进程查询表达式。
+func (a *nativeApp) procQueryExpr(expr string) string {
+	expr = strings.TrimSpace(expr)
+	if !a.procNetOnly {
+		return expr
+	}
+	if expr == "" {
+		return "n>0"
+	}
+	return "(" + expr + ") and n>0"
+}
+
+func (a *nativeApp) syncProcNetCheckbox() {
+	if a.chkNetOnly == nil {
+		return
+	}
+	showCtrl(a.chkNetOnly.Hwnd(), a.tabs != nil && a.tabs.active == 1)
+}
+
+func (a *nativeApp) toggleProcNetOnly() {
+	a.procNetOnly = a.chkNetOnly.IsChecked()
+	if a.tabs != nil && a.tabs.active == 1 {
+		a.tabs.procTable.reload(strings.TrimSpace(a.tabs.procExpr), a.tabs.procSort, a.tabs.procDesc)
+		a.refreshFixedCount()
+		a.refreshHotValues()
+	}
+}
+
+// refreshHotValuesOnData 数据变化后节流刷新热词（热词为全局 TOP 值，与筛选无关）。
+func (a *nativeApp) refreshHotValuesOnData() {
+	if time.Since(a.hotLast) < 2*time.Second {
+		return
+	}
+	a.hotLast = time.Now()
+	a.refreshHotValuesKeep()
+}
+
 func (a *nativeApp) refreshFixedCount() {
 	if a.sbar == nil {
 		return
@@ -901,7 +972,7 @@ func (a *nativeApp) refreshFixedCount() {
 		var err error
 		switch tab {
 		case 1:
-			total, err = a.cfg.db.CountProcessesFiltered(expr)
+			total, err = a.cfg.db.CountProcessesFiltered(a.procQueryExpr(expr))
 		case 2:
 			total, err = a.cfg.db.CountDNSFiltered(expr)
 		default:
@@ -1076,7 +1147,7 @@ func boolChoices(meta FieldMeta) []string {
 	case "outbound":
 		return []string{"出站", "入站"}
 	case "public":
-		return []string{"公网", "内网"}
+		return []string{"外网", "内网"}
 	case "ipv6":
 		return []string{"是", "否"}
 	default:
@@ -1084,7 +1155,14 @@ func boolChoices(meta FieldMeta) []string {
 	}
 }
 
-func (a *nativeApp) refreshHotValues() {
+// refreshHotValues 清空后刷新热词（切换字段、重置等场景）。
+func (a *nativeApp) refreshHotValues() { a.refreshHotValuesMode(true) }
+
+// refreshHotValuesKeep 不清空现有热词、查询完成后原地更新数字，
+// 数据驱动刷新专用，避免按钮整行隐藏再显示造成闪烁。
+func (a *nativeApp) refreshHotValuesKeep() { a.refreshHotValuesMode(false) }
+
+func (a *nativeApp) refreshHotValuesMode(clear bool) {
 	fields := a.activeFields()
 	idx := a.cbField.SelectedIndex()
 	if idx < 0 || idx >= len(fields) {
@@ -1094,9 +1172,11 @@ func (a *nativeApp) refreshHotValues() {
 	a.hotGen++
 	gen := a.hotGen
 	tab := a.filterTab
-	a.hotValues = nil
-	a.hotCounts = nil
-	a.wnd.UiThread(a.layout)
+	if clear {
+		a.hotValues = nil
+		a.hotCounts = nil
+		a.wnd.UiThread(a.layout)
+	}
 	if meta.Type == "bool" || meta.Type == "time" {
 		return
 	}
@@ -1105,7 +1185,7 @@ func (a *nativeApp) refreshHotValues() {
 		var err error
 		switch tab {
 		case 1:
-			vals, err = a.cfg.db.ProcessValues(meta.Name, 10)
+			vals, err = a.cfg.db.ProcessValuesFiltered(meta.Name, 10, a.procNetOnly)
 		case 2:
 			vals, err = a.cfg.db.DNSValues(meta.Name, 10)
 		default:
@@ -1691,6 +1771,7 @@ func (a *nativeApp) onLiveBatch(n int, took time.Duration) {
 	}
 	a.setStatus(liveReadText(n, took.Milliseconds()))
 	a.refreshFixedCount()
+	a.refreshHotValuesOnData()
 	if a.tabs != nil && (a.tabs.active == 1 || a.tabs.active == 2) {
 		a.tabs.refreshActive()
 		return

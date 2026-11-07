@@ -114,11 +114,9 @@ func fillDetailList(lv *ui.ListView, c *Conn, loc *time.Location) {
 		{"域名", c.DstHost},
 		{"端口名", c.PortNm},
 		{"归属地", c.Geo},
-		{"公网", boolText(c.Public, "公网", "内网")},
+		{"内外网", boolText(c.Public, "外网", "内网")},
 		{"IPv6", boolText(c.V6, "是", "否")},
 		{"完整性", c.Integ},
-		{"进程哈希", c.Hashes},
-		{"Sysmon 规则", c.Rule},
 		{"来源", c.Source},
 		{"风险", risk},
 	}

@@ -48,22 +48,26 @@ func newNativeTabs(a *nativeApp) *nativeTabs {
 	t.conn = newConnTable(a, tab.Item(0).Child())
 	t.proc = newTabList(tab.Item(1).Child(),
 		[]tabCol{
-			{"序号", 48}, {"进程", 155}, {"PID", 58}, {"用户", 85},
-			{"进程GUID", 110}, {"命令行", 180}, {"父进程", 130}, {"哈希", 110},
-			{"连接数", 70}, {"公网", 58}, {"目的IP数", 75}, {"启动", 150},
+			{"序号", 48}, {"进程", 155}, {"父进程", 130}, {"命令行", 180},
+			{"PID", 58}, {"进程GUID", 110}, {"哈希", 110}, {"用户", 85},
+			{"连接数", 70}, {"外网数", 58}, {"目的IP数", 75}, {"启动", 150},
 			{"结束", 150}, {"风险", 55}, {"来源", 85},
-		})
+		}, 6) // 默认隐藏哈希
 	t.dns = newTabList(tab.Item(2).Child(),
 		[]tabCol{
 			{"序号", 48}, {"时间", 150}, {"主机", 85}, {"PID", 58}, {"进程", 155},
 			{"用户", 85}, {"进程GUID", 110}, {"查询域名", 170}, {"解析结果", 230},
 			{"归属地", 180}, {"状态", 65}, {"规则", 70}, {"风险", 65},
-		})
+		}, 2, 11) // 默认隐藏主机、规则（归属地不隐藏）
 	t.procTable = newSharedVirtualTable(
 		a, t.proc, "进程",
 		snapshotNow,
-		a.cfg.db.CountProcessesFilteredAsOf,
-		a.cfg.db.PageProcsAsOf,
+		func(expr string, asOf int64) (int, error) {
+			return a.cfg.db.CountProcessesFilteredAsOf(a.procQueryExpr(expr), asOf)
+		},
+		func(expr string, limit, offset int, sortField string, desc bool, asOf int64) ([]procRow, error) {
+			return a.cfg.db.PageProcsAsOf(a.procQueryExpr(expr), limit, offset, sortField, desc, asOf)
+		},
 		a.processTableCell,
 		nil,
 	)
@@ -106,7 +110,7 @@ type tabCol struct {
 }
 
 var processSortColumns = []string{
-	"", "image", "pid", "user", "guid", "cmdline", "parent", "hashes",
+	"", "image", "parent", "cmdline", "pid", "guid", "hashes", "user",
 	"n", "pub", "ips", "start", "end", "risky", "source",
 }
 
@@ -122,17 +126,17 @@ func (a *nativeApp) processTableCell(p procRow, col, row int) string {
 	case 1:
 		return p.Image
 	case 2:
-		return p.PID
-	case 3:
-		return p.User
-	case 4:
-		return p.Guid
-	case 5:
-		return p.CmdLine
-	case 6:
 		return p.Parent
-	case 7:
+	case 3:
+		return p.CmdLine
+	case 4:
+		return p.PID
+	case 5:
+		return p.Guid
+	case 6:
 		return p.Hashes
+	case 7:
+		return p.User
 	case 8:
 		return strconv.Itoa(p.N)
 	case 9:
@@ -186,15 +190,23 @@ func (a *nativeApp) dnsTableCell(x *DNSQ, col, row int) string {
 	return ""
 }
 
-func newTabList(parent ui.Parent, cols []tabCol) *ui.ListView {
+func newTabList(parent ui.Parent, cols []tabCol, hidden ...int) *ui.ListView {
+	hideSet := map[int]bool{}
+	for _, i := range hidden {
+		hideSet[i] = true
+	}
 	opts := ui.OptsListView().
 		Position(ui.Dpi(0, 0)).
 		Size(ui.Dpi(600, 300)).
 		Layout(ui.LAY_RESIZE_RESIZE).
 		CtrlStyle(co.LVS_REPORT | co.LVS_OWNERDATA | co.LVS_SHOWSELALWAYS | co.LVS_SINGLESEL).
 		CtrlExStyle(co.LVS_EX_FULLROWSELECT | co.LVS_EX_DOUBLEBUFFER | co.LVS_EX_INFOTIP)
-	for _, c := range cols {
-		opts.Column(c.title, ui.DpiX(c.width))
+	for i, c := range cols {
+		w := ui.DpiX(c.width)
+		if hideSet[i] {
+			w = 0 // 默认隐藏，创建时置 0 才生效
+		}
+		opts.Column(c.title, w)
 	}
 	return ui.NewListView(parent, opts)
 }
@@ -207,6 +219,7 @@ func (t *nativeTabs) bind() {
 		t.app.syncSyntaxForTab(t.active)
 		t.resizeContent()
 		t.refreshActive()
+		t.app.syncProcNetCheckbox()
 		t.app.refreshFixedCount()
 	})
 	t.proc.On().LvnItemActivate(func(p *win.NMITEMACTIVATE) {
@@ -316,7 +329,13 @@ func (t *nativeTabs) openProcFilterMenu() {
 		1: "image", 2: "pid", 3: "user", 4: "guid", 5: "cmdline",
 		6: "parent", 7: "hashes", 14: "source",
 	}
-	field := fields[int(hit.ISubItem)]
+	numericFields := map[int]string{
+		8: "n", 9: "pub", 10: "ips",
+	}
+	field, isNumeric := numericFields[int(hit.ISubItem)]
+	if !isNumeric {
+		field = fields[int(hit.ISubItem)]
+	}
 	if field == "" {
 		return
 	}
@@ -334,11 +353,22 @@ func (t *nativeTabs) openProcFilterMenu() {
 	t.app.wnd.Hwnd().SetForegroundWindow()
 	id, _ := menu.TrackPopupMenu(co.TPM_LEFTALIGN|co.TPM_TOPALIGN|co.TPM_RETURNCMD,
 		int(screenPt.X), int(screenPt.Y), t.app.wnd.Hwnd())
-	if id == 1 {
-		t.app.addCellFilter(field, value, "AND")
-	} else if id == 2 {
-		t.app.addCellFilter(field, value, "OR")
+	if id != 1 && id != 2 {
+		return
 	}
+	logic := "AND"
+	if id == 2 {
+		logic = "OR"
+	}
+	if isNumeric {
+		num, perr := strconv.Atoi(strings.ReplaceAll(value, ",", ""))
+		if perr != nil || num < 0 {
+			return
+		}
+		t.app.appendFilterExpr(fmt.Sprintf("%s>=%d", field, num), logic)
+		return
+	}
+	t.app.addCellFilter(field, value, logic)
 }
 
 func (t *nativeTabs) listAt(idx int) *ui.ListView {
@@ -391,6 +421,7 @@ func (t *nativeTabs) selectTab(idx int) {
 	t.app.syncSyntaxForTab(idx)
 	t.resizeContent()
 	t.refreshActive()
+	t.app.syncProcNetCheckbox()
 	t.app.refreshFixedCount()
 }
 
@@ -471,7 +502,9 @@ func (t *nativeTabs) scrollTop() {
 	if lv == nil || lv.Hwnd() == 0 || lv.ItemCount() == 0 {
 		return
 	}
+	hOrigin := listHOrigin(lv)
 	lv.Hwnd().SendMessage(co.LVM_ENSUREVISIBLE, 0, 1)
+	restoreListHOrigin(lv, hOrigin)
 	state := win.LVITEM{
 		State:     co.LVIS_FOCUSED | co.LVIS_SELECTED,
 		StateMask: co.LVIS_FOCUSED | co.LVIS_SELECTED,
