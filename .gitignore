@@ -1,0 +1,21 @@
+# 构建产物
+outputs/
+
+# build.sh 从 sysmon/ 和 data/ 复制生成的嵌入资源
+audit/data/
+
+# 运行时数据
+trace-audit-data/
+*.db
+*.db-wal
+*.db-shm
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Go 临时文件
+*.test
+*.out
