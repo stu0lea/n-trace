@@ -33,11 +33,34 @@ type nativeTabs struct {
 	dnsDesc  bool
 }
 
-func newNativeTabs(a *nativeApp) *nativeTabs {
+// initialTabBounds 与 layout() 的表格区算法保持一致：
+// 创建 Tab 和列表时直接给撑开后的尺寸，避免启动瞬间先以小尺寸闪现。
+func initialTabBounds(winW, winH int) (x, y, w, h int) {
+	margin := ui.DpiX(12)
+	y = ui.DpiY(156)
+	bottomH := ui.DpiY(28) + ui.DpiY(2)
+	h = winH - y - bottomH - ui.DpiY(8)
+	if h < ui.DpiY(120) {
+		h = ui.DpiY(120)
+	}
+	return margin, y, winW - margin*2, h
+}
+
+func newNativeTabs(a *nativeApp, winW, winH int) *nativeTabs {
+	tabX, tabY, tabW, tabH := initialTabBounds(winW, winH)
+	// 列表初始尺寸取 Tab 显示区（去掉表头和边框的近似值），
+	// 精确尺寸随后由 resizeContent 校正。
+	lvW, lvH := tabW-ui.DpiX(8), tabH-ui.DpiY(30)
+	if lvW < ui.DpiX(200) {
+		lvW = ui.DpiX(200)
+	}
+	if lvH < ui.DpiY(100) {
+		lvH = ui.DpiY(100)
+	}
 	tab := ui.NewTab(a.wnd, ui.OptsTab().
 		Titles("连接", "进程", "DNS").
-		Position(ui.Dpi(12, 124)).
-		Size(ui.Dpi(600, 300)).
+		Position(tabX, tabY).
+		Size(tabW, tabH).
 		Layout(ui.LAY_RESIZE_RESIZE))
 
 	t := &nativeTabs{
@@ -45,15 +68,15 @@ func newNativeTabs(a *nativeApp) *nativeTabs {
 		procSort: "start", procDesc: true,
 		dnsSort: "ts", dnsDesc: true,
 	}
-	t.conn = newConnTable(a, tab.Item(0).Child())
-	t.proc = newTabList(tab.Item(1).Child(),
+	t.conn = newConnTable(a, tab.Item(0).Child(), lvW, lvH)
+	t.proc = newTabList(tab.Item(1).Child(), lvW, lvH,
 		[]tabCol{
 			{"序号", 48}, {"进程", 155}, {"父进程", 130}, {"命令行", 180},
 			{"PID", 58}, {"进程GUID", 110}, {"哈希", 110}, {"用户", 85},
 			{"连接数", 70}, {"外网数", 58}, {"目的IP数", 75}, {"启动", 150},
 			{"结束", 150}, {"风险", 55}, {"来源", 85},
 		}, 6) // 默认隐藏哈希
-	t.dns = newTabList(tab.Item(2).Child(),
+	t.dns = newTabList(tab.Item(2).Child(), lvW, lvH,
 		[]tabCol{
 			{"序号", 48}, {"时间", 150}, {"主机", 85}, {"PID", 58}, {"进程", 155},
 			{"用户", 85}, {"进程GUID", 110}, {"查询域名", 170}, {"解析结果", 230},
@@ -190,14 +213,14 @@ func (a *nativeApp) dnsTableCell(x *DNSQ, col, row int) string {
 	return ""
 }
 
-func newTabList(parent ui.Parent, cols []tabCol, hidden ...int) *ui.ListView {
+func newTabList(parent ui.Parent, lvW, lvH int, cols []tabCol, hidden ...int) *ui.ListView {
 	hideSet := map[int]bool{}
 	for _, i := range hidden {
 		hideSet[i] = true
 	}
 	opts := ui.OptsListView().
 		Position(ui.Dpi(0, 0)).
-		Size(ui.Dpi(600, 300)).
+		Size(lvW, lvH).
 		Layout(ui.LAY_RESIZE_RESIZE).
 		CtrlStyle(co.LVS_REPORT | co.LVS_OWNERDATA | co.LVS_SHOWSELALWAYS | co.LVS_SINGLESEL).
 		CtrlExStyle(co.LVS_EX_FULLROWSELECT | co.LVS_EX_DOUBLEBUFFER | co.LVS_EX_INFOTIP)
@@ -383,33 +406,44 @@ func (t *nativeTabs) listAt(idx int) *ui.ListView {
 }
 
 func (t *nativeTabs) resizeContent() {
-	idx := t.active
+	sel := t.active
 	if item, ok := t.tab.ItemSelected(); ok {
-		idx = item.Index()
+		sel = item.Index()
 	}
-	child := t.tab.Item(idx).Child().Hwnd()
-	if child == 0 {
-		return
-	}
+	var rcDisp win.RECT
 	if rcTab, err := t.tab.Hwnd().GetWindowRect(); err == nil {
 		if hParent, err := t.tab.Hwnd().GetParent(); err == nil {
 			_ = hParent.ScreenToClientRc(&rcTab)
 			t.tab.Hwnd().SendMessage(co.TCM_ADJUSTRECT, 0, win.LPARAM(unsafe.Pointer(&rcTab)))
-			child.SetWindowPos(win.HWND(0),
-				win.POINT{X: rcTab.Left, Y: rcTab.Top},
-				win.SIZE{Cx: rcTab.Right - rcTab.Left, Cy: rcTab.Bottom - rcTab.Top},
-				co.SWP_NOZORDER|co.SWP_SHOWWINDOW)
+			rcDisp = rcTab
 		}
 	}
-	rc, err := child.GetClientRect()
-	if err != nil {
-		return
+	// 调整全部子容器与列表的尺寸；只显示激活页的子容器，
+	// 其余隐藏（否则启动瞬间未布局的小尺寸列表会叠在激活页上）。
+	for i := 0; i < t.tab.ItemCount(); i++ {
+		child := t.tab.Item(i).Child().Hwnd()
+		if child == 0 {
+			continue
+		}
+		child.SetWindowPos(win.HWND(0),
+			win.POINT{X: rcDisp.Left, Y: rcDisp.Top},
+			win.SIZE{Cx: rcDisp.Right - rcDisp.Left, Cy: rcDisp.Bottom - rcDisp.Top},
+			co.SWP_NOZORDER)
+		if i == sel {
+			child.ShowWindow(co.SW_SHOW)
+		} else {
+			child.ShowWindow(co.SW_HIDE)
+		}
+		rc, err := child.GetClientRect()
+		if err != nil {
+			continue
+		}
+		lv := t.listAt(i)
+		if lv == nil || lv.Hwnd() == 0 {
+			continue
+		}
+		setBounds(lv.Hwnd(), 0, 0, int(rc.Right-rc.Left), int(rc.Bottom-rc.Top))
 	}
-	lv := t.listAt(idx)
-	if lv == nil || lv.Hwnd() == 0 {
-		return
-	}
-	setBounds(lv.Hwnd(), 0, 0, int(rc.Right-rc.Left), int(rc.Bottom-rc.Top))
 }
 
 func (t *nativeTabs) selectTab(idx int) {

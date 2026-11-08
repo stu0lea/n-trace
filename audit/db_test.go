@@ -382,7 +382,7 @@ func TestProcessEventsPersistWithoutConnections(t *testing.T) {
 	if _, _, err := d.compileProcess("dst_port=443"); err == nil {
 		t.Fatal("进程筛选不应接受仅连接页支持的字段")
 	}
-	vals, err := d.ProcessValues("image", 10)
+	vals, err := d.ProcessValuesFiltered("image", 10, false)
 	if err != nil {
 		t.Fatal(err)
 	}

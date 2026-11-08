@@ -1,6 +1,8 @@
 <Sysmon schemaversion="4.50">
   <EventFiltering>
     <ProcessCreate onmatch="exclude"/>
+    <!-- 进程退出（EID 5）：补上进程生命周期的结束端点 -->
+    <ProcessTerminate onmatch="exclude"/>
     <NetworkConnect onmatch="exclude"/>
     <DnsQuery onmatch="exclude"/>
   </EventFiltering>

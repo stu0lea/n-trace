@@ -24,9 +24,6 @@ func (d *DB) DeleteSource(name string) (int64, int64, error) {
 		return 0, 0, err
 	}
 	nDNS, _ := resDNS.RowsAffected()
-	if _, err := tx.Exec(`DELETE FROM process_event WHERE source=?`, name); err != nil {
-		return 0, 0, err
-	}
 	if _, err := tx.Exec(`DELETE FROM file WHERE name=?`, name); err != nil {
 		return 0, 0, err
 	}

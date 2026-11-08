@@ -8,7 +8,6 @@ var errAdminCancelled = errors.New("已取消管理员授权")
 type adminRequest struct {
 	Task    string  `json:"task"`
 	DataDir string  `json:"dataDir"`
-	Args    *string `json:"args,omitempty"`
 	DNSSet  bool    `json:"dnsSet,omitempty"`
 	DNS     bool    `json:"dns,omitempty"`
 	LogGB   float64 `json:"logGb,omitempty"`

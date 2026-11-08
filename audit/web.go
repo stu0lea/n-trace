@@ -204,16 +204,17 @@ func (s *server) handleSysmonUninstall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"ok": true, "output": out, "status": sysmonStatus(s.dataDir)})
 }
 
-// handleSysmonArgs 保存附加安装参数，并立即按新参数重新安装。
+// handleSysmonArgs 修改安装参数（可选）与 DNS 开关，并重新安装生效。
 func (s *server) handleSysmonArgs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	text, err := sysmonSetArgs(s.dataDir, r.FormValue("args"))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if v, ok := r.Form["args"]; ok && strings.TrimSpace(v[0]) != "" {
+		if _, err := sysmonSetArgs(s.dataDir, v[0]); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	if v, ok := r.Form["dns"]; ok {
 		on := len(v) > 0 && v[0] != "0" && v[0] != "false"
@@ -229,7 +230,7 @@ func (s *server) handleSysmonArgs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	started := s.enableLive()
-	writeJSON(w, map[string]interface{}{"ok": true, "args": text, "output": out,
+	writeJSON(w, map[string]interface{}{"ok": true, "output": out,
 		"liveStarted": started, "status": sysmonStatus(s.dataDir)})
 }
 
@@ -413,7 +414,7 @@ func (s *server) handleValues(w http.ResponseWriter, r *http.Request) {
 	)
 	switch r.URL.Query().Get("tab") {
 	case "procs":
-		vals, err = s.db.ProcessValues(field, intParam(r, "limit", 10))
+		vals, err = s.db.ProcessValuesFiltered(field, intParam(r, "limit", 10), false)
 	case "dns":
 		vals, err = s.db.DNSValues(field, intParam(r, "limit", 10))
 	default:

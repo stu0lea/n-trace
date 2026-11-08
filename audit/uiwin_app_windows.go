@@ -77,6 +77,7 @@ type nativeApp struct {
 
 	hotGen         int
 	hotLast        time.Time
+	hotCache       map[string]hotEntry
 	fixedCountGen  int
 	logTotals      LogTotals
 	logTotalsReady bool
@@ -160,6 +161,7 @@ func newNativeApp(cfg nativeConfig) *nativeApp {
 		cfg: cfg, loc: loc, fieldIdx: map[string]int{}, filterTab: 0,
 		refreshEvery: time.Duration(sec) * time.Second,
 		liveWake:     make(chan struct{}, 1),
+		hotCache:     map[string]hotEntry{},
 		procNetOnly:  true,
 	}
 	fields, err := cfg.db.Fields()
@@ -245,7 +247,7 @@ func (a *nativeApp) build() {
 		Position(ui.Dpi(12, 8)).
 		Width(ui.DpiX(32)).
 		CtrlStyle(co.BS_ICON))
-	a.tabs = newNativeTabs(a)
+	a.tabs = newNativeTabs(a, winW, winH)
 	a.table = a.tabs.conn
 	a.btnExport = ui.NewButton(a.wnd, ui.OptsButton().
 		Text("导出日志").
@@ -328,6 +330,7 @@ func (a *nativeApp) bindEvents() {
 		})
 	}
 	a.wnd.On().WmCommand(uint16(menuDataSources), co.CMD(0), func() { a.openSysmonPanel() })
+	a.wnd.On().WmCommand(uint16(menuSettings), co.CMD(0), func() { a.openSettingsPanel() })
 	a.wnd.On().WmCommand(uint16(menuAbout), co.CMD(0), func() { a.showAbout() })
 	a.wnd.On().WmCommand(uint16(menuStats), co.CMD(0), func() { a.openStatsPanel() })
 	a.wnd.On().WmCommand(uint16(menuImport), co.CMD(0), func() { a.importDialog() })
@@ -677,6 +680,7 @@ func (a *nativeApp) buildMenu() {
 		return
 	}
 	appendMenuItem(config, 0, menuDataSources, "日志源管理", 0)
+	appendMenuItem(config, 1, menuSettings, "数据与保留设置", 0)
 	appendMenuItem(menu, 0, 100, "配置", config)
 	appendMenuItem(menu, 1, menuStats, "数据统计", 0)
 	appendMenuItem(menu, 2, menuImport, "导入日志", 0)
@@ -1155,6 +1159,25 @@ func boolChoices(meta FieldMeta) []string {
 	}
 }
 
+// hotCacheTTL 热词缓存有效期；有效期内不再对整表做 GROUP BY，
+// 数据驱动的节流刷新也只读缓存，避免大库时反复全表聚合。
+const hotCacheTTL = time.Minute
+
+type hotEntry struct {
+	vals []Count
+	at   time.Time
+}
+
+// hotCacheKey 缓存键：Tab + 字段名 + 进程“仅显示有网络连接进程”开关。
+func hotCacheKey(tab int, field string, netOnly bool) string {
+	return strconv.Itoa(tab) + "|" + field + "|" + strconv.FormatBool(netOnly)
+}
+
+// hotEntryFresh 判断缓存条目是否仍在有效期内。
+func hotEntryFresh(e hotEntry, now time.Time) bool {
+	return now.Sub(e.at) < hotCacheTTL
+}
+
 // refreshHotValues 清空后刷新热词（切换字段、重置等场景）。
 func (a *nativeApp) refreshHotValues() { a.refreshHotValuesMode(true) }
 
@@ -1169,21 +1192,35 @@ func (a *nativeApp) refreshHotValuesMode(clear bool) {
 		return
 	}
 	meta := fields[idx]
+	if meta.Type == "bool" || meta.Type == "time" {
+		if clear {
+			a.hotValues = nil
+			a.hotCounts = nil
+			a.wnd.UiThread(a.layout)
+		}
+		return
+	}
+	key := hotCacheKey(a.filterTab, meta.Name, a.procNetOnly)
+	entry, cached := a.hotCache[key]
 	a.hotGen++
 	gen := a.hotGen
-	tab := a.filterTab
-	if clear {
+
+	// 有缓存（含过期）先显示，既避免闪烁也保证切换字段时立刻有内容。
+	if cached {
+		a.applyHotValues(entry.vals)
+		a.wnd.UiThread(a.layout)
+	} else if clear {
 		a.hotValues = nil
 		a.hotCounts = nil
 		a.wnd.UiThread(a.layout)
 	}
-	if meta.Type == "bool" || meta.Type == "time" {
+	if cached && hotEntryFresh(entry, time.Now()) {
 		return
 	}
 	go func() {
 		var vals []Count
 		var err error
-		switch tab {
+		switch a.filterTab {
 		case 1:
 			vals, err = a.cfg.db.ProcessValuesFiltered(meta.Name, 10, a.procNetOnly)
 		case 2:
@@ -1191,23 +1228,29 @@ func (a *nativeApp) refreshHotValuesMode(clear bool) {
 		default:
 			vals, err = a.cfg.db.Values(meta.Name, 10)
 		}
+		if err != nil {
+			return // 查询失败时保留旧热词
+		}
+		a.hotCache[key] = hotEntry{vals: vals, at: time.Now()}
 		a.wnd.UiThread(func() {
 			if gen != a.hotGen {
 				return
 			}
-			a.hotValues = nil
-			a.hotCounts = nil
-			if err == nil {
-				for _, v := range vals {
-					if strings.TrimSpace(v.Key) != "" && len(a.hotValues) < 10 {
-						a.hotValues = append(a.hotValues, v.Key)
-						a.hotCounts = append(a.hotCounts, v.N)
-					}
-				}
-			}
+			a.applyHotValues(vals)
 			a.layout()
 		})
 	}()
+}
+
+func (a *nativeApp) applyHotValues(vals []Count) {
+	a.hotValues = nil
+	a.hotCounts = nil
+	for _, v := range vals {
+		if strings.TrimSpace(v.Key) != "" && len(a.hotValues) < 10 {
+			a.hotValues = append(a.hotValues, v.Key)
+			a.hotCounts = append(a.hotCounts, v.N)
+		}
+	}
 }
 
 func (a *nativeApp) addHotValueAt(idx int) {
@@ -1223,7 +1266,8 @@ func (a *nativeApp) addHotValue(value string) {
 		return
 	}
 	logic := "OR"
-	c := filterCond{logic: logic, field: fields[idx], op: a.selectedOp(), value: value}
+	// 点选热词按精确匹配处理，不跟随当前下拉框选择的运算符。
+	c := filterCond{logic: logic, field: fields[idx], op: "=", value: value}
 	expr, err := conditionExpr(c)
 	if err != nil {
 		a.setStatus(err.Error())

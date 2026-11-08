@@ -52,10 +52,10 @@ func TestRepeatedBackfillDoesNotDuplicateRows(t *testing.T) {
 		t.Fatalf("重复补读后总数错误: %+v", totals)
 	}
 	var processEvents int
-	if err := d.sql.QueryRow(`SELECT count(*) FROM process_event`).Scan(&processEvents); err != nil {
+	if err := d.sql.QueryRow(`SELECT count(*) FROM process_list`).Scan(&processEvents); err != nil {
 		t.Fatal(err)
 	}
 	if processEvents != 1 {
-		t.Fatalf("process_event=%d，want 1", processEvents)
+		t.Fatalf("process_list=%d，want 1", processEvents)
 	}
 }

@@ -74,8 +74,11 @@ func showDetailWindow(parent ui.Parent, c *Conn, loc *time.Location) {
 	})
 	modal.On().WmCreate(func(_ ui.WmCreate) int {
 		fillDetailList(lv, c, loc)
-		edRaw.SetText(detailJSON(c.Raw))
-		_ = lblRaw
+		if len(c.Raw) == 0 {
+			lblRaw.Hwnd().SetWindowText("原始 JSON（当前配置未保存原始事件）")
+		} else {
+			edRaw.SetText(detailJSON(c.Raw))
+		}
 		return 0
 	})
 

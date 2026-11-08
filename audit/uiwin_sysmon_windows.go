@@ -89,9 +89,9 @@ func (p *sysmonPanel) build() {
 		Size(ui.Dpi(300, 22)))
 
 	ui.NewStatic(p.modal, ui.OptsStatic().
-		Text("安装参数（保存后自动重新安装）").
+		Text("安装参数（可修改，保存后重新安装生效；DNS 开关联动路径）").
 		Position(ui.Dpi(12, 436)).
-		Size(ui.Dpi(420, 20)))
+		Size(ui.Dpi(460, 20)))
 	p.edArgs = ui.NewEdit(p.modal, ui.OptsEdit().
 		Position(ui.Dpi(12, 458)).
 		Width(ui.DpiX(868)).
@@ -100,7 +100,7 @@ func (p *sysmonPanel) build() {
 		WndStyle(co.WS_CHILD|co.WS_VISIBLE|co.WS_BORDER|co.WS_VSCROLL))
 
 	p.btnArgs = ui.NewButton(p.modal, ui.OptsButton().
-		Text("保存参数重新安装").
+		Text("保存设置重新安装").
 		Position(ui.Dpi(12, 522)).
 		Width(ui.DpiX(150)))
 	p.btnUninst = ui.NewButton(p.modal, ui.OptsButton().
@@ -129,6 +129,10 @@ func (p *sysmonPanel) build() {
 	p.btnLog.On().BnClicked(func() { p.applyLogSize() })
 	p.btnUninst.On().BnClicked(func() { p.uninstall() })
 	p.btnArgs.On().BnClicked(func() { p.saveArgs() })
+	// 勾选/取消 DNS 时，安装参数里的 DNS 配置路径实时出现/消失。
+	p.chkDNS.On().BnClicked(func() {
+		p.edArgs.SetText(sysmonEffectiveArgs(p.app.cfg.dataDir, p.chkDNS.IsChecked()))
+	})
 	p.btnElevate.On().BnClicked(func() { p.app.restartElevated() })
 	p.srcList.On().NmClick(func(p2 *win.NMITEMACTIVATE) {
 		if p2.ISubItem == 4 && p2.IItem >= 0 {
@@ -275,11 +279,15 @@ func (p *sysmonPanel) uninstall() {
 }
 
 func (p *sysmonPanel) saveArgs() {
-	text := p.edArgs.Text()
 	dns := p.chkDNS.IsChecked()
-	p.runTask("保存参数并重新安装", func() (string, error) {
+	p.runTask("保存设置并重新安装", func() (string, error) {
+		// 先校验并保存参数（写入 config.ini 的 sysmon_args），
+		// 再按 DNS 开关联动调整路径后重新安装。
+		if _, err := sysmonSetArgs(p.app.cfg.dataDir, p.edArgs.Text()); err != nil {
+			return "", err
+		}
 		p.app.stopLive()
-		res, err := p.app.runAdminTask(adminRequest{Task: "install", Args: &text, DNSSet: true, DNS: dns})
+		res, err := p.app.runAdminTask(adminRequest{Task: "install", DNSSet: true, DNS: dns})
 		return res.Output, err
 	}, true)
 }

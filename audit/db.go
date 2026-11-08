@@ -97,13 +97,35 @@ type DB struct {
 	geo *geoDB
 	mu  sync.Mutex
 
+	// storeRaw=false 时不保存原始事件 JSON，显著减少磁盘占用。
+	storeRaw bool
+
 	// 实时采集用：跨批次保留的进程信息与 IP->域名 关联。
 	procCache map[string]*procInfo
 	ipdns     map[string][]ipDNS
 }
 
+// SetStoreRaw 运行时切换是否保存原始事件 JSON（只影响之后写入的数据）。
+func (d *DB) SetStoreRaw(v bool) {
+	d.mu.Lock()
+	d.storeRaw = v
+	d.mu.Unlock()
+}
+
+func (d *DB) rawJSON(raw map[string]string) string {
+	if !d.storeRaw {
+		// 空字符串不是合法 JSON，会让查询里的 json_extract 报错；用空对象占位。
+		return "{}"
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
 func openDB(path string, geo *geoDB) (*DB, error) {
-	dsn := path + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-65536)&_pragma=temp_store(MEMORY)&_pragma=busy_timeout(5000)"
+	dsn := path + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-65536)&_pragma=temp_store(MEMORY)&_pragma=busy_timeout(5000)&_pragma=auto_vacuum(INCREMENTAL)"
 	sqldb, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -111,7 +133,7 @@ func openDB(path string, geo *geoDB) (*DB, error) {
 	// WAL 模式下允许后台读取与实时写入并行，避免表格查询被单连接串行阻塞。
 	sqldb.SetMaxOpenConns(4)
 	sqldb.SetMaxIdleConns(4)
-	d := &DB{sql: sqldb, geo: geo, procCache: map[string]*procInfo{}, ipdns: map[string][]ipDNS{}}
+	d := &DB{sql: sqldb, geo: geo, storeRaw: true, procCache: map[string]*procInfo{}, ipdns: map[string][]ipDNS{}}
 	if err := d.migrate(); err != nil {
 		sqldb.Close()
 		return nil, err
@@ -150,30 +172,6 @@ func (d *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_dns_ts ON dns(ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_dns_ts_id ON dns(ts DESC, id DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_dns_query ON dns(query)`,
-		`CREATE TABLE IF NOT EXISTS process_event(
-			id INTEGER PRIMARY KEY,
-			event_id INTEGER NOT NULL,
-			ts INTEGER NOT NULL,
-			host TEXT,
-			guid TEXT,
-			pid TEXT,
-			image TEXT,
-			cmdline TEXT,
-			user TEXT,
-			integrity TEXT,
-			hashes TEXT,
-			parent_guid TEXT,
-			parent_pid TEXT,
-			parent_image TEXT,
-			parent_cmdline TEXT,
-			rule_name TEXT,
-			raw TEXT,
-			source TEXT,
-			UNIQUE(guid, event_id, ts)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_process_ts ON process_event(ts)`,
-		`CREATE INDEX IF NOT EXISTS idx_process_guid ON process_event(guid)`,
-		`CREATE INDEX IF NOT EXISTS idx_process_image ON process_event(image)`,
 		`CREATE TABLE IF NOT EXISTS process_list(
 			guid TEXT PRIMARY KEY,
 			start_ts INTEGER DEFAULT 0,
@@ -259,11 +257,29 @@ func (d *DB) migrate() error {
 	}
 	var processListVersion string
 	_ = d.sql.QueryRow(`SELECT value FROM app_meta WHERE key='process_list_version'`).Scan(&processListVersion)
-	if processListVersion != "1" {
-		if err := d.rebuildProcessList(); err != nil {
-			return fmt.Errorf("初始化进程聚合表失败: %w", err)
+	if processListVersion != "2" {
+		// v2：废弃进程原始事件表（process_event），只留聚合表。
+		// 老库先按原逻辑从 process_event 重建一次聚合（不丢 rule_name/end_ts
+		// 等只有事件里才有的字段），然后删除原始表。
+		if d.hasTable("process_event") {
+			if err := d.rebuildProcessList(); err != nil {
+				return fmt.Errorf("初始化进程聚合表失败: %w", err)
+			}
+			if _, err := d.sql.Exec(`DROP TABLE process_event`); err != nil {
+				return fmt.Errorf("删除进程原始事件表失败: %w", err)
+			}
 		}
-		_, _ = d.sql.Exec(`INSERT INTO app_meta(key,value) VALUES('process_list_version','1')
+		_, _ = d.sql.Exec(`INSERT INTO app_meta(key,value) VALUES('process_list_version','2')
+			ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
+	}
+	// 修复早期 store_raw=false 写入的空 raw（json_extract 遇到空串会报错）。
+	var emptyRawFixed string
+	_ = d.sql.QueryRow(`SELECT value FROM app_meta WHERE key='empty_raw_repaired'`).Scan(&emptyRawFixed)
+	if emptyRawFixed != "1" {
+		for _, table := range []string{"conn", "dns"} {
+			_, _ = d.sql.Exec("UPDATE " + table + " SET raw='{}' WHERE raw=''")
+		}
+		_, _ = d.sql.Exec(`INSERT INTO app_meta(key,value) VALUES('empty_raw_repaired','1')
 			ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
 	}
 	// 旧库只有单个导入文件时，把历史记录归到该文件，保证删除按钮可用。
@@ -447,6 +463,14 @@ func (d *DB) SetFileInfo(name, path string, size int64) error {
 	return err
 }
 
+func (d *DB) hasTable(name string) bool {
+	var n int
+	if err := d.sql.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n); err != nil {
+		return false
+	}
+	return n > 0
+}
+
 func (d *DB) hasColumn(table, col string) bool {
 	rows, err := d.sql.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
@@ -600,8 +624,7 @@ func (d *DB) writeBatch(file string, conns []*Conn, dnss []*DNSQ, procs []*Proce
 
 	n := 0
 	for _, c := range conns {
-		raw, _ := json.Marshal(c.Raw)
-		res, err := insConn.Exec(c.TS, c.Host, c.PID, c.Guid, c.Image, c.User, c.Proto, c.SrcIP, c.SrcPort, c.DstIP, atoi(c.DstPort), c.DstHost, c.PortNm, b2i(c.Out), b2i(c.V6), c.Geo, b2i(c.Public), c.CmdLine, c.Parent, c.Hashes, c.Integ, c.Rule, strings.Join(c.Risk, " "), string(raw), file)
+		res, err := insConn.Exec(c.TS, c.Host, c.PID, c.Guid, c.Image, c.User, c.Proto, c.SrcIP, c.SrcPort, c.DstIP, atoi(c.DstPort), c.DstHost, c.PortNm, b2i(c.Out), b2i(c.V6), c.Geo, b2i(c.Public), c.CmdLine, c.Parent, c.Hashes, c.Integ, c.Rule, strings.Join(c.Risk, " "), d.rawJSON(c.Raw), file)
 		if err != nil {
 			return n, err
 		}
@@ -625,33 +648,17 @@ func (d *DB) writeBatch(file string, conns []*Conn, dnss []*DNSQ, procs []*Proce
 		}
 		defer insDNS.Close()
 		for _, q := range dnss {
-			raw, _ := json.Marshal(q.Raw)
 			if _, err := insDNS.Exec(q.TS, q.Host, q.PID, q.Guid, q.Image, q.User, q.Query,
-				q.Results, q.Status, q.Geo, q.Country, strings.Join(q.Risk, " "), string(raw), file); err != nil {
+				q.Results, q.Status, q.Geo, q.Country, strings.Join(q.Risk, " "), d.rawJSON(q.Raw), file); err != nil {
 				return n, err
 			}
 		}
 	}
 
-	if len(procs) > 0 {
-		insProc, err := tx.Prepare(`INSERT OR IGNORE INTO process_event(
-			event_id,ts,host,guid,pid,image,cmdline,user,integrity,hashes,
-			parent_guid,parent_pid,parent_image,parent_cmdline,rule_name,raw,source)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-		if err != nil {
+	// 进程原始事件不落库，只维护聚合表（含 EID 5 的 end_ts）。
+	for _, p := range procs {
+		if err := updateProcessListFromEvent(tx, p, file); err != nil {
 			return n, err
-		}
-		defer insProc.Close()
-		for _, p := range procs {
-			raw, _ := json.Marshal(p.Raw)
-			if _, err := insProc.Exec(p.EventID, p.TS, p.Host, p.Guid, p.PID, p.Image,
-				p.CmdLine, p.User, p.Integrity, p.Hashes, p.ParentGuid, p.ParentPID,
-				p.ParentImage, p.ParentCmdLine, p.Rule, string(raw), file); err != nil {
-				return n, err
-			}
-			if err := updateProcessListFromEvent(tx, p, file); err != nil {
-				return n, err
-			}
 		}
 	}
 
@@ -1726,28 +1733,6 @@ func (d *DB) DNSValues(name string, limit int) ([]Count, error) {
 	return out, nil
 }
 
-func (d *DB) ProcessValues(name string, limit int) ([]Count, error) {
-	col, _, err := processField(name)
-	if err != nil {
-		return nil, err
-	}
-	q := "SELECT " + col + " k, count(*) n FROM process_event WHERE event_id=1 AND " +
-		col + " IS NOT NULL AND " + col + " != '' GROUP BY k ORDER BY n DESC LIMIT ?"
-	rows, err := d.sql.Query(q, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []Count{}
-	for rows.Next() {
-		var c Count
-		if rows.Scan(&c.Key, &c.N) == nil {
-			out = append(out, c)
-		}
-	}
-	return out, nil
-}
-
 // ProcessValuesFiltered 按聚合视图统计进程字段 TOP 值；netOnly 时排除无网络连接的进程。
 func (d *DB) ProcessValuesFiltered(name string, limit int, netOnly bool) ([]Count, error) {
 	col, _, err := processField(name)
@@ -1968,124 +1953,6 @@ func (d *DB) queryProcs(expr string, limit, offset int, sortField string, desc b
 	return d.PageProcsAsOf(expr, limit, offset, sortField, desc, 0)
 }
 
-func (d *DB) queryProcsAsOf(expr string, limit, offset int, sortField string, desc bool, asOf int64) ([]procRow, error) {
-	connWhere, connArgs, connErr := d.compile(expr)
-	procWhere, procArgs, procErr := d.compileProcess(expr)
-	if strings.TrimSpace(expr) != "" && connErr != nil && procErr != nil {
-		return nil, procErr
-	}
-	if connErr != nil {
-		connWhere, connArgs = "1=1", nil
-	}
-	if procErr != nil {
-		procWhere, procArgs = "1=1", nil
-	}
-	procFilter := "(" + procWhere + ")"
-	connFilter := "(" + connWhere + ")"
-	endFilter := ""
-	if asOf > 0 {
-		procFilter += " AND ts<=?"
-		connFilter += " AND ts<=?"
-		endFilter = " AND ts<=?"
-		procArgs = append(procArgs, asOf)
-		connArgs = append(connArgs, asOf)
-	}
-	eventFilter := ""
-	unionConn := connErr == nil
-	if procErr != nil {
-		eventFilter = " WHERE guid IN (SELECT guid FROM conn_stats)"
-	}
-	order, err := processOrderClause(sortField, desc)
-	if err != nil {
-		return nil, err
-	}
-	q := `WITH ev_start AS (
-		SELECT guid,ts,host,pid,image,cmdline,user,integrity,hashes,
-			parent_guid,parent_pid,parent_image,parent_cmdline,rule_name,source
-		FROM (
-			SELECT *, row_number() OVER (PARTITION BY guid ORDER BY ts ASC) rn
-			FROM process_event WHERE event_id=1 AND ` + procFilter + `
-		) WHERE rn=1
-	),
-	ev_end AS (
-		SELECT guid,max(ts) end_ts FROM process_event WHERE event_id=5` + endFilter + ` GROUP BY guid
-	),
-	conn_base AS (
-		SELECT guid,ts,host,image,pid,user,cmdline,parent,hashes,source,public,dst_ip,risk,
-			row_number() OVER (PARTITION BY guid ORDER BY ts DESC) rn
-		FROM conn WHERE ` + connFilter + `
-	),
-	conn_stats AS (
-		SELECT guid,
-			coalesce(max(CASE WHEN rn=1 THEN host END),'') host,
-			coalesce(max(CASE WHEN rn=1 THEN image END),'') image,
-			coalesce(max(CASE WHEN rn=1 THEN pid END),'') pid,
-			coalesce(max(CASE WHEN rn=1 THEN user END),'') user,
-			coalesce(max(CASE WHEN rn=1 THEN cmdline END),'') cmdline,
-			coalesce(max(CASE WHEN rn=1 THEN parent END),'') parent,
-			coalesce(max(CASE WHEN rn=1 THEN hashes END),'') hashes,
-			coalesce(group_concat(DISTINCT NULLIF(source,'')),'') source,
-			count(*) n, coalesce(sum(public),0) pub, count(DISTINCT dst_ip) ips,
-			min(ts) first, max(ts) last, sum(CASE WHEN risk!='' THEN 1 ELSE 0 END) risky
-		FROM conn_base GROUP BY guid
-	),
-	guids AS (
-		SELECT guid FROM ev_start` + eventFilter + `
-		` + func() string {
-		if unionConn {
-			return "UNION SELECT guid FROM conn_stats"
-		}
-		return ""
-	}() + `
-	)
-	SELECT g.guid,
-		coalesce(s.host,c.host,''),
-		coalesce(nullif(s.image,''),nullif(c.image,''),'System'),
-		coalesce(s.pid,c.pid,''),
-		coalesce(s.user,c.user,''),
-		coalesce(s.cmdline,c.cmdline,''),
-		coalesce(s.parent_image,c.parent,''),
-		coalesce(s.hashes,c.hashes,''),
-		coalesce(s.rule_name,''),
-		coalesce(s.ts,0), coalesce(e.end_ts,0),
-		CASE
-			WHEN coalesce(s.source,'')='' THEN coalesce(c.source,'')
-			WHEN coalesce(c.source,'')='' OR c.source=s.source THEN s.source
-			ELSE s.source || ',' || c.source
-		END,
-		coalesce(c.n,0), coalesce(c.pub,0), coalesce(c.ips,0),
-		coalesce(c.first,0), coalesce(c.last,0), coalesce(c.risky,0)
-	FROM guids g
-	LEFT JOIN ev_start s ON s.guid=g.guid
-	LEFT JOIN ev_end e ON e.guid=g.guid
-	LEFT JOIN conn_stats c ON c.guid=g.guid
-	ORDER BY ` + order
-	args := append([]interface{}{}, procArgs...)
-	if asOf > 0 {
-		args = append(args, asOf)
-	}
-	args = append(args, connArgs...)
-	if limit > 0 {
-		q += " LIMIT ? OFFSET ?"
-		args = append(args, limit, offset)
-	}
-	rows, err := d.sql.Query(q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []procRow{}
-	for rows.Next() {
-		var p procRow
-		if err := rows.Scan(&p.Guid, &p.Host, &p.Image, &p.PID, &p.User, &p.CmdLine,
-			&p.Parent, &p.Hashes, &p.Rule, &p.Start, &p.End, &p.Source,
-			&p.N, &p.Pub, &p.IPs, &p.First, &p.Last, &p.Risky); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
 
 // ExportDNSRows 返回当前筛选结果的 DNS 记录，供导出 CSV 使用。
 func (d *DB) ExportDNSRows(expr string) (*sql.Rows, error) {

@@ -22,7 +22,7 @@ func showProcessDetailWindow(a *nativeApp, p procRow) {
 
 	modal := ui.NewModal(a.wnd, ui.OptsModal().
 		Title("进程详情 - "+displayBase(p.Image)).
-		Size(ui.Dpi(1140, 680)).
+		Size(ui.Dpi(1140, 640)).
 		Style(co.WS_CAPTION|co.WS_SYSMENU|co.WS_VISIBLE))
 
 	info := ui.NewListView(modal, ui.OptsListView().
@@ -96,21 +96,21 @@ func showProcessDetailWindow(a *nativeApp, p procRow) {
 		fillProcessInfo(info, p, a.loc)
 		if queryErr != nil {
 			_ = lblConns.Hwnd().SetWindowText("读取连接失败：" + queryErr.Error())
-			return 0
-		}
-		for _, c := range conns {
-			dir := "入站"
-			if c.Out {
-				dir = "出站"
+		} else {
+			for _, c := range conns {
+				dir := "入站"
+				if c.Out {
+					dir = "出站"
+				}
+				src := c.SrcIP
+				if c.SrcPort != "" {
+					src += ":" + c.SrcPort
+				}
+				lv.AddItem(timeText(c.TS, a.loc), dir, strings.ToUpper(c.Proto), src,
+					c.DstIP, c.DstPort, c.DstHost, c.Geo, strings.Join(c.Risk, " "))
 			}
-			src := c.SrcIP
-			if c.SrcPort != "" {
-				src += ":" + c.SrcPort
-			}
-			lv.AddItem(timeText(c.TS, a.loc), dir, strings.ToUpper(c.Proto), src,
-				c.DstIP, c.DstPort, c.DstHost, c.Geo, strings.Join(c.Risk, " "))
+			_ = lblConns.Hwnd().SetWindowText(fmt.Sprintf("该进程连接时间线（%s 条，按时间正序）", commaInt(len(conns))))
 		}
-		_ = lblConns.Hwnd().SetWindowText(fmt.Sprintf("该进程连接时间线（%s 条，按时间正序）", commaInt(len(conns))))
 		return 0
 	})
 	modal.ShowModal()

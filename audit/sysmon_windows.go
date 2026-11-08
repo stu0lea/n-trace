@@ -72,7 +72,7 @@ func sysmonStatus(dataDir string) SysmonStatus {
 	dir, exe, pkgErr := sysmonPackageFor(v)
 	st := SysmonStatus{
 		Supported: true, Channel: sysmonChannel, OSVersion: v.Str,
-		Admin: isAdmin(), Arch: archLabel(), ArgsText: sysmonArgsText(dataDir),
+		Admin: isAdmin(), Arch: archLabel(),
 		DNSSupported: supportsDNS(v),
 	}
 	st.DNSEnabled = st.DNSSupported && sysmonDNSEnabled(dataDir)
@@ -211,73 +211,127 @@ func archLabel() string {
 	}
 }
 
-const defaultExtraArgs = "-n"
-
-// sysmonArgsText 返回用户保存的附加安装参数（不含固定的 -accepteula -i）。
-// 旧版本保存的 -dns 会被移除：DNS 参数由程序按系统版本自动添加。
-func sysmonArgsText(dataDir string) string {
-	b, err := os.ReadFile(filepath.Join(dataDir, "sysmon-args.txt"))
-	if err != nil {
-		return defaultExtraArgs
-	}
-	args, err := splitArgs(string(b))
-	if err != nil {
-		return defaultExtraArgs
-	}
-	out := make([]string, 0, len(args))
-	for _, a := range args {
-		if a != "-dns" {
-			out = append(out, a)
-		}
-	}
-	return strings.Join(out, " ")
-}
-
 // supportsDNS 判断系统是否有 DNS Client ETW 遥测（Windows 8.1+）。
 func supportsDNS(v winVersionInfo) bool {
 	return v.Major > 6 || (v.Major == 6 && v.Minor >= 3)
 }
 
-// sysmonEffectiveArgs 返回实际下发的完整安装参数，供界面展示。
+// sysmonEffectiveArgs 返回按 DNS 开关调整后的完整安装参数（预览用，不落盘）。
 func sysmonEffectiveArgs(dataDir string, dns bool) string {
-	parts := []string{"-accepteula", "-i"}
-	if dns {
-		cfg, err := writeDNSConfig(dataDir)
-		if err == nil {
-			if strings.ContainsAny(cfg, " \t") {
-				cfg = `"` + cfg + `"`
-			}
-			parts = append(parts, cfg)
-		}
-	}
-	extra := sysmonExtraArgs(dataDir)
-	if !hasSysmonFlag(extra, "-n") {
-		extra = append(extra, "-n")
-	}
-	parts = append(parts, extra...)
-	return strings.Join(parts, " ")
+	return composeSysmonArgs(sysmonArgsText(dataDir), dns, dataDir)
 }
 
 const dnsConfigName = "sysmon-dns.xml"
 
-// sysmonDNSEnabled 读取 DNS 开关，默认开启（仅对支持的系统生效）。
-func sysmonDNSEnabled(dataDir string) bool {
-	b, err := os.ReadFile(filepath.Join(dataDir, "sysmon-dns.txt"))
-	if err != nil {
-		return true
+// sysmonArgsText 返回保存的完整安装参数（config.ini 的 sysmon_args）；
+// 未配置时按 DNS 开关组装默认值并写回。
+func sysmonArgsText(dataDir string) string {
+	cfg := loadAppConfig(dataDir)
+	if text := strings.TrimSpace(cfg.SysmonArgs); text != "" {
+		return text
 	}
-	return strings.TrimSpace(string(b)) != "0"
+	text := composeSysmonArgs("", sysmonDNSEnabled(dataDir), dataDir)
+	cfg.SysmonArgs = text
+	_ = cfg.save(dataDir)
+	return text
+}
+
+// composeSysmonArgs 组装完整安装参数：
+// -accepteula -i [DNS配置路径] -n（extra 仅用于旧版参数迁移）。
+// 不勾选 DNS 时裸 -i：Sysmon 内置默认配置本身就会记录进程创建与退出（EID 1/5）。
+func composeSysmonArgs(extra string, dns bool, dataDir string) string {
+	args, err := splitArgs(extra)
+	if err != nil {
+		args = nil
+	}
+	clean := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-accepteula" {
+			continue
+		}
+		if args[i] == "-i" {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+			}
+			continue
+		}
+		clean = append(clean, args[i])
+	}
+	out := []string{"-accepteula", "-i"}
+	if dns {
+		out = append(out, filepath.Join(dataDir, dnsConfigName))
+	}
+	out = append(out, clean...)
+	if !hasSysmonFlag(clean, "-n") {
+		out = append(out, "-n")
+	}
+	return strings.Join(out, " ")
+}
+
+// hasSysmonFlag 判断参数里是否已包含某个开关（兼容 -x=true 写法）。
+func hasSysmonFlag(args []string, flag string) bool {
+	for _, a := range args {
+		key := a
+		if j := strings.Index(a, "="); j > 0 {
+			key = a[:j]
+		}
+		if key == flag {
+			return true
+		}
+	}
+	return false
+}
+
+// dnsConfigPath 返回数据目录下的 DNS 配置完整路径。
+func dnsConfigPath(dataDir string) string {
+	return filepath.Join(dataDir, dnsConfigName)
+}
+
+// sysmonDNSEnabled 读取 DNS 开关（config.ini 的 sysmon_dns_enabled，默认开启；
+// 旧版本存在 sysmon-dns.txt 时读取并迁移）。仅对支持的系统生效。
+func sysmonDNSEnabled(dataDir string) bool {
+	legacy := filepath.Join(dataDir, "sysmon-dns.txt")
+	if _, err := os.Stat(legacy); err == nil {
+		on := true
+		if b, rerr := os.ReadFile(legacy); rerr == nil {
+			on = strings.TrimSpace(string(b)) != "0"
+		}
+		cfg := loadAppConfig(dataDir)
+		cfg.SysmonDNSEnabled = on
+		_ = cfg.save(dataDir)
+		_ = os.Remove(legacy)
+		return on
+	}
+	return loadAppConfig(dataDir).SysmonDNSEnabled
 }
 
 func sysmonSetDNS(dataDir string, on bool) error {
-	v := "1"
-	if !on {
-		v = "0"
+	cfg := loadAppConfig(dataDir)
+	cfg.SysmonDNSEnabled = on
+	// DNS 开关联动安装参数：勾选时自动补上 sysmon-dns.xml 路径，取消时自动移除。
+	cfg.SysmonArgs = composeSysmonArgs(sysmonArgsText(dataDir), on, dataDir)
+	if err := cfg.save(dataDir); err != nil {
+		return err
 	}
-	return os.WriteFile(filepath.Join(dataDir, "sysmon-dns.txt"), []byte(v+"\n"), 0o644)
+	_ = os.Remove(filepath.Join(dataDir, "sysmon-dns.txt"))
+	return nil
 }
 
-// writeDNSConfig 生成最小配置：打开进程创建、网络连接与 DNS 查询。
+// sysmonSetArgs 校验并保存完整安装参数（写入 config.ini 的 sysmon_args）。
+func sysmonSetArgs(dataDir, text string) (string, error) {
+	if err := validateSysmonArgs(text); err != nil {
+		return "", err
+	}
+	cfg := loadAppConfig(dataDir)
+	cfg.SysmonArgs = strings.TrimSpace(text)
+	if err := cfg.save(dataDir); err != nil {
+		return "", fmt.Errorf("保存参数失败: %v", err)
+	}
+	return cfg.SysmonArgs, nil
+}
+
+// writeDNSConfig 生成最小配置：打开进程创建/退出、网络连接与 DNS 查询。
+// （自定义配置会整体替换 Sysmon 默认规则集，所以进程退出必须显式写出。）
 //
 // 注意两个坑：
 //  1. 配置是整体替换规则集，不是追加；
@@ -286,61 +340,9 @@ func sysmonSetDNS(dataDir string, on bool) error {
 func writeDNSConfig(dataDir string) (string, error) {
 	p := filepath.Join(dataDir, dnsConfigName)
 	if err := os.WriteFile(p, []byte(sysmonDNSConfigXML), 0o644); err != nil {
-		return "", fmt.Errorf("写入 DNS 配置失败: %v", err)
+		return "", fmt.Errorf("写入 Sysmon 配置失败: %v", err)
 	}
 	return p, nil
-}
-
-// sysmonSetArgs 校验并保存附加安装参数。
-func sysmonSetArgs(dataDir, text string) (string, error) {
-	text, err := normalizeSysmonArgs(text)
-	if err != nil {
-		return "", err
-	}
-	if err := validateSysmonArgs(text); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(filepath.Join(dataDir, "sysmon-args.txt"), []byte(text+"\n"), 0o644); err != nil {
-		return "", fmt.Errorf("保存参数失败: %v", err)
-	}
-	return text, nil
-}
-
-// normalizeSysmonArgs 去掉界面里手写的固定参数（-accepteula/-i/-dns），只保留附加选项。
-// 界面输入框展示的是完整命令行，保存时统一剥离，避免重复下发或误带配置路径。
-func normalizeSysmonArgs(text string) (string, error) {
-	args, err := splitArgs(strings.TrimSpace(text))
-	if err != nil {
-		return "", err
-	}
-	out := make([]string, 0, len(args))
-	needValue := map[string]bool{"-h": true, "-a": true, "-g": true, "-k": true, "-d": true, "-z": true}
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if !strings.HasPrefix(a, "-") {
-			// 配置路径、参数值的残留片段（例如带空格的 -i 路径被拆开），直接丢弃。
-			continue
-		}
-		key := a
-		if j := strings.Index(a, "="); j > 0 {
-			key = a[:j]
-		}
-		switch key {
-		case "-accepteula", "-dns":
-			continue
-		case "-i":
-			if !strings.Contains(a, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				i++
-			}
-			continue
-		}
-		out = append(out, a)
-		if needValue[key] && !strings.Contains(a, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-			out = append(out, args[i+1])
-			i++
-		}
-	}
-	return strings.Join(out, " "), nil
 }
 
 // splitArgs 按空白拆分参数，支持双引号包裹含空格的值。
@@ -375,7 +377,8 @@ func splitArgs(s string) ([]string, error) {
 	return out, nil
 }
 
-// validateSysmonArgs 只允许应急常用开关，避免误传 -i/-u 等安装控制参数。
+// validateSysmonArgs 校验完整安装参数：允许固定部分（-accepteula/-i 配置路径）
+// 和应急常用开关，避免误传 -u 等卸载控制参数。
 func validateSysmonArgs(text string) error {
 	if len(text) > 512 {
 		return fmt.Errorf("参数过长（最多 512 字符）")
@@ -384,9 +387,11 @@ func validateSysmonArgs(text string) error {
 	if err != nil {
 		return err
 	}
+	// -i 的配置路径是可选的（裸 -i 用默认配置安装），其余带值开关仍要求有值。
 	needValue := map[string]bool{"-h": true, "-a": true, "-g": true, "-k": true, "-d": true, "-z": true}
+	optionalValue := map[string]bool{"-i": true}
 	allowed := map[string]bool{
-		"-n": true, "-l": true, "-h": true, "-a": true,
+		"-accepteula": true, "-i": true, "-n": true, "-l": true, "-h": true, "-a": true,
 		"-g": true, "-k": true, "-d": true, "-z": true, "-r": true, "-t": true,
 	}
 	for i := 0; i < len(args); i++ {
@@ -409,19 +414,17 @@ func validateSysmonArgs(text string) error {
 				return fmt.Errorf("参数 %s 需要一个值", key)
 			}
 			i++
+		} else if optionalValue[key] && !strings.Contains(t, "=") {
+			// -i 后跟非 "-" 开头的 token 时视为配置路径。
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+			}
 		}
 	}
-	return nil
-}
-
-// sysmonExtraArgs 返回保存的附加参数，解析失败时退回默认值。
-func sysmonExtraArgs(dataDir string) []string {
-	text := sysmonArgsText(dataDir)
-	args, err := splitArgs(text)
-	if err != nil {
-		args, _ = splitArgs(defaultExtraArgs)
+	if !hasSysmonFlag(args, "-n") {
+		return fmt.Errorf("缺少 -n（网络连接 EID 3），网络审计会失效")
 	}
-	return args
+	return nil
 }
 
 // releaseSysmonBinary 把指定安装包释放到数据目录并返回路径。
@@ -452,24 +455,25 @@ func installSysmonPackage(dataDir, dir, exe string, useDNS bool) (string, error)
 			logs = append(logs, s)
 		}
 	}
-	// 固定 -accepteula -i，附加参数由界面保存。
-	// Win8.1+ 有 DNS Client ETW，安装时带一份只开 DnsQuery 的最小配置来采集 EID 22；
-	// Sysmon 没有 -dns 命令行开关（Win7 上更是没有 DNS 遥测）。
-	argv := []string{"-accepteula", "-i"}
-	// 10.2 没有 DnsQuery 事件（schema 上限 4.21），带配置会直接装不上。
-	if useDNS && dir != "win7" && supportsDNS(windowsVersionInfo()) && sysmonDNSEnabled(dataDir) {
-		cfg, err := writeDNSConfig(dataDir)
-		if err != nil {
-			return "", err
+	// 安装参数按 DNS 开关组装：Win8.1+ 且勾选 DNS 时带一份最小配置（进程创建/
+	// 退出/网络连接/DNS 查询全收）；未勾选则裸 -i -n 按内置默认配置安装，
+	// 默认配置本身就会记录进程退出（EID 5）。Win7 没有 DNS 遥测，同裸 -i -n。
+	var argv []string
+	if dir == "win7" || !supportsDNS(windowsVersionInfo()) {
+		argv = []string{"-accepteula", "-i", "-n"}
+	} else {
+		dnsOn := sysmonDNSEnabled(dataDir)
+		dnsArgs, derr := splitArgs(sysmonEffectiveArgs(dataDir, dnsOn))
+		if derr != nil {
+			dnsArgs = []string{"-accepteula", "-i", "-n"}
 		}
-		argv = append(argv, cfg)
+		argv = dnsArgs
+		if dnsOn {
+			if _, err := writeDNSConfig(dataDir); err != nil {
+				return "", err
+			}
+		}
 	}
-	extra := sysmonExtraArgs(dataDir)
-	if !hasSysmonFlag(extra, "-n") {
-		// 没有 -n 就没有 EID 3，网络连接审计会失效，这里兜底补上。
-		extra = append(extra, "-n")
-	}
-	argv = append(argv, extra...)
 	appPrintf("[Sysmon] 执行: %s %s", exe, strings.Join(argv, " "))
 	addLog("> " + exe + " " + strings.Join(argv, " "))
 	out, err := runHidden(dest, argv...)
@@ -491,16 +495,6 @@ func installSysmonPackage(dataDir, dir, exe string, useDNS bool) (string, error)
 		}
 	}
 	return strings.Join(logs, "\r\n"), nil
-}
-
-// hasSysmonFlag 判断参数里是否已包含某个开关（兼容 -x=true 写法）。
-func hasSysmonFlag(args []string, flag string) bool {
-	for _, a := range args {
-		if a == flag || strings.HasPrefix(a, flag+"=") {
-			return true
-		}
-	}
-	return false
 }
 
 // sysmonInstall 按当前系统选择安装包，执行 -accepteula -i -n 并把上限设为 2GB。

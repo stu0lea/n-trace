@@ -80,6 +80,9 @@ func main() {
 		log.Fatalf("打开数据库失败: %v", err)
 	}
 	defer db.Close()
+	db.SetStoreRaw(appCfg.StoreRaw)
+	// 后台数据保留清理：每轮执行前重新读取配置，界面修改保留天数后无需重启。
+	db.StartRetention(func() int { return loadAppConfig(dir).DataRetentionDays }, appPrintf)
 
 	if m, err := db.Meta(); err == nil && !*quiet {
 		appPrintf("数据库：%v 条连接，%v 条 DNS", m["conns"], m["dns"])

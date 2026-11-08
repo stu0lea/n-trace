@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-// 实时采集只看 Sysmon 的进程创建、网络连接、DNS 查询三类事件。
-const liveEventFilter = `*[System[(EventID=1 or EventID=3 or EventID=22)]]`
+// 实时采集看 Sysmon 的进程创建、进程退出、网络连接、DNS 查询四类事件。
+const liveEventFilter = `*[System[(EventID=1 or EventID=3 or EventID=5 or EventID=22)]]`
 
 func liveSupported() error { return nil }
 
@@ -52,7 +52,7 @@ func liveLatestID(channel string) (int64, error) {
 
 // liveQuery 取记录号大于 after 的事件（最多 max 条）。XPath 带记录号过滤失败时回退到最新 max 条。
 func liveQuery(channel string, after int64, max int) ([]rawEvent, error) {
-	q := fmt.Sprintf(`*[System[(EventID=1 or EventID=3 or EventID=22) and EventRecordID>%d]]`, after)
+	q := fmt.Sprintf(`*[System[(EventID=1 or EventID=3 or EventID=5 or EventID=22) and EventRecordID>%d]]`, after)
 	if b, err := runWevt("qe", channel, "/q:"+q, "/f:xml", "/c:"+strconv.Itoa(max)); err == nil {
 		return parseXMLEvents(b), nil
 	}
@@ -65,7 +65,7 @@ func liveQuery(channel string, after int64, max int) ([]rawEvent, error) {
 
 // liveQueryAfter 按记录号从小到大读取历史事件，用于启动时补读。
 func liveQueryAfter(channel string, after int64, max int) ([]rawEvent, error) {
-	q := fmt.Sprintf(`*[System[(EventID=1 or EventID=3 or EventID=22) and EventRecordID>%d]]`, after)
+	q := fmt.Sprintf(`*[System[(EventID=1 or EventID=3 or EventID=5 or EventID=22) and EventRecordID>%d]]`, after)
 	b, err := runWevt("qe", channel, "/q:"+q, "/f:xml", "/c:"+strconv.Itoa(max))
 	if err != nil {
 		return nil, err

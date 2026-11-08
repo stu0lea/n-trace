@@ -60,11 +60,11 @@ var connHiddenFields = map[string]bool{
 	"host": true, "hashes": true, "rule_name": true,
 }
 
-func newConnTable(app *nativeApp, parent ui.Parent) *connTable {
+func newConnTable(app *nativeApp, parent ui.Parent, lvW, lvH int) *connTable {
 	opts := ui.OptsListView().
 		CtrlId(30001).
 		Position(ui.Dpi(0, 0)).
-		Size(ui.Dpi(600, 300)).
+		Size(lvW, lvH).
 		Layout(ui.LAY_RESIZE_RESIZE).
 		CtrlStyle(co.LVS_REPORT | co.LVS_OWNERDATA | co.LVS_SHOWSELALWAYS | co.LVS_SINGLESEL).
 		CtrlExStyle(co.LVS_EX_FULLROWSELECT | co.LVS_EX_DOUBLEBUFFER | co.LVS_EX_INFOTIP)

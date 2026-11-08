@@ -13,6 +13,10 @@ type appConfig struct {
 	LiveChannel         string
 	LogRetentionMonths  int
 	SysmonLogMaxGB      float64
+	DataRetentionDays   int
+	StoreRaw            bool
+	SysmonArgs          string
+	SysmonDNSEnabled    bool
 }
 
 func defaultAppConfig() appConfig {
@@ -21,6 +25,9 @@ func defaultAppConfig() appConfig {
 		LiveChannel:         defaultChannel,
 		LogRetentionMonths:  6,
 		SysmonLogMaxGB:      2,
+		DataRetentionDays:   90,
+		StoreRaw:            true,
+		SysmonDNSEnabled:    true,
 	}
 }
 
@@ -64,6 +71,20 @@ func (c *appConfig) parse(text string) {
 			if v, err := strconv.ParseFloat(val, 64); err == nil {
 				c.SysmonLogMaxGB = v
 			}
+		case "data_retention_days":
+			if n, err := strconv.Atoi(val); err == nil {
+				c.DataRetentionDays = n
+			}
+		case "store_raw":
+			if b, err := strconv.ParseBool(val); err == nil {
+				c.StoreRaw = b
+			}
+		case "sysmon_args":
+			c.SysmonArgs = strings.TrimSpace(val)
+		case "sysmon_dns_enabled":
+			if b, err := strconv.ParseBool(val); err == nil {
+				c.SysmonDNSEnabled = b
+			}
 		}
 	}
 }
@@ -79,7 +100,16 @@ live_channel = %s
 log_retention_months = %d
 # Sysmon 日志上限（GB）
 sysmon_log_max_gb = %.1f
-`, c.ReadIntervalSeconds, c.LiveChannel, c.LogRetentionMonths, c.SysmonLogMaxGB)
+# 数据保留天数（超过后自动清理，0 表示不清理）
+data_retention_days = %d
+# 是否保存原始事件 JSON（关闭可显著减少磁盘占用，详情页将看不到原始事件）
+store_raw = %t
+# Sysmon 完整安装参数（可修改；DNS 配置路径由 DNS 开关自动增删）
+sysmon_args = %s
+# 是否启用 DNS 查询日志（Windows 8.1+）
+sysmon_dns_enabled = %t
+`, c.ReadIntervalSeconds, c.LiveChannel, c.LogRetentionMonths, c.SysmonLogMaxGB,
+		c.DataRetentionDays, c.StoreRaw, c.SysmonArgs, c.SysmonDNSEnabled)
 	return os.WriteFile(filepath.Join(dir, "config.ini"), []byte(text), 0o644)
 }
 
@@ -95,5 +125,8 @@ func (c *appConfig) normalize() {
 	}
 	if c.SysmonLogMaxGB < 0.0625 || c.SysmonLogMaxGB > 64 {
 		c.SysmonLogMaxGB = 2
+	}
+	if c.DataRetentionDays < 0 || c.DataRetentionDays > 3650 {
+		c.DataRetentionDays = 90
 	}
 }

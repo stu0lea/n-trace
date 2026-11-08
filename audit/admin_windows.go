@@ -46,14 +46,6 @@ func performAdminTask(req adminRequest) adminResult {
 
 	switch req.Task {
 	case "install":
-		argsText := ""
-		if req.Args != nil {
-			text, err := sysmonSetArgs(req.DataDir, *req.Args)
-			if err != nil {
-				return fail(err)
-			}
-			argsText = text
-		}
 		if req.DNSSet {
 			if err := sysmonSetDNS(req.DataDir, req.DNS); err != nil {
 				return fail(err)
@@ -63,10 +55,9 @@ func performAdminTask(req adminRequest) adminResult {
 		if err != nil {
 			res := fail(err)
 			res.Output = out
-			res.ArgsText = argsText
 			return res
 		}
-		res := adminResult{OK: true, Output: out, ArgsText: argsText}
+		res := adminResult{OK: true, Output: out}
 		appPrintf("管理员任务完成：安装 Sysmon")
 		return res
 
